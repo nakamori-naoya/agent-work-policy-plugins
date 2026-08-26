@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Work Policy"
+  short_description: "Git作業のworktree・承認・公開条件を制御する"
+  default_prompt: "Use $work-with-policy to perform this repository task under its configured Git work policy."

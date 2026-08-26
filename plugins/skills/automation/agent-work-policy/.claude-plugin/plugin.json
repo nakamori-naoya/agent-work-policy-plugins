@@ -1,0 +1,9 @@
+{
+  "name": "agent-work-policy",
+  "version": "0.1.4",
+  "description": "AIエージェントのGit作業を、workspace・permission・human gate・merge readinessの設定に従って進める",
+  "author": {
+    "name": "NaoyaNakamori"
+  },
+  "skills": "./skills"
+}

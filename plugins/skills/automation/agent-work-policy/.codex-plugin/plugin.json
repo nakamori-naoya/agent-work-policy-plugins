@@ -1,0 +1,20 @@
+{
+  "name": "agent-work-policy",
+  "version": "0.1.4",
+  "skills": "./skills",
+  "description": "AIエージェントのGit作業を、workspace・permission・human gate・merge readinessの設定に従って進める",
+  "author": {
+    "name": "NaoyaNakamori"
+  },
+  "interface": {
+    "displayName": "Agent Work Policy",
+    "shortDescription": "AIエージェントのGit作業を、workspace・permission・human gate・merge readinessの設定に従って進める",
+    "longDescription": "AIエージェントのGit作業を、workspace・permission・human gate・merge readinessの設定に従って進める",
+    "developerName": "NaoyaNakamori",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Skills"
+    ],
+    "defaultPrompt": "agent-work-policyを使ってこの作業を進めてください。"
+  }
+}
