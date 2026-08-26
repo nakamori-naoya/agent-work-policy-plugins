@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/plugin-repository-validation.XXXXXX") || exit 2
 trap 'rm -rf "$TMP_ROOT"' EXIT
 failed=0
-jq -r '.plugins[].name' "$ROOT/vendor-lock.json" | sort > "$TMP_ROOT/expected"
+jq -r '.plugins[].name' "$ROOT/.agents/plugins/marketplace.json" | sort > "$TMP_ROOT/expected"
 find "$ROOT/plugins" -path '*/.codex-plugin/plugin.json' -type f -exec jq -r '.name' {} \; | sort > "$TMP_ROOT/actual"
 diff -u "$TMP_ROOT/expected" "$TMP_ROOT/actual" >/dev/null || failed=1
 for market in .agents/plugins/marketplace.json .claude-plugin/marketplace.json; do
@@ -14,7 +14,7 @@ for market in .agents/plugins/marketplace.json .claude-plugin/marketplace.json; 
 done
 while IFS='|' read -r name version rel; do
   jq -e --arg n "$name" --arg v "$version" '.name==$n and .version==$v' "$ROOT/$rel/.codex-plugin/plugin.json" "$ROOT/$rel/.claude-plugin/plugin.json" >/dev/null || failed=1
-done < <(jq -r '.plugins[] | [.name,.version,.path] | join("|")' "$ROOT/vendor-lock.json")
+done < <(jq -r '.plugins[] | [.name,.version,(.source.path | ltrimstr("./"))] | join("|")' "$ROOT/.agents/plugins/marketplace.json")
 while IFS= read -r pb; do
   yq -o=json -I=0 '.' "$pb" | jq -e '.version==2 and all(.requires[]; type=="object" and ((keys|sort)==["marketplace","plugin","version"]))' >/dev/null || failed=1
   root=$(dirname "$pb")

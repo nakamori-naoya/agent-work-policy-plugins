@@ -1,1 +1,0 @@
-{"schema":1,"upstream":{"repository":"https://github.com/nakamori-naoya/harness-plugins","commit":"10852c3365df0c454160082b1458ca381e5d3dab","copied_at":"2026-08-26"},"plugins":[{"name":"agent-work-policy","version":"0.1.4","path":"plugins/skills/automation/agent-work-policy"}]}
