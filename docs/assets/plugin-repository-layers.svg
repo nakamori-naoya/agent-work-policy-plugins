@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="600" viewBox="0 0 1100 600" role="img" aria-labelledby="title desc">
+  <title id="title">Marketplace repositoryの層と依存方向</title>
+  <desc id="desc">Repository開発層からcatalog、leaf plugin、外部pluginとruntimeへ向かう依存方向。sharedからleafへの同期とvalidationから各層への検査は開発時だけ。</desc>
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#245f9e"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#7d91aa"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; fill: #172033; }
+      .title { font-size: 24px; font-weight: 700; }
+      .label { font-size: 17px; font-weight: 700; }
+      .body { font-size: 14px; }
+      .small { font-size: 13px; fill: #5c6c82; }
+    </style>
+  </defs>
+  <rect width="1100" height="600" fill="#ffffff"/>
+  <text x="40" y="42" class="title">Leaf pluginはrepository開発層へ逆依存しない</text>
+
+  <rect x="40" y="75" width="1020" height="145" rx="16" fill="#fff5e6" stroke="#b5791f" stroke-width="2"/>
+  <text x="65" y="106" class="label">Repository開発層（install後は存在しない）</text>
+  <rect x="80" y="130" width="220" height="62" rx="9" fill="#ffffff" stroke="#b5791f"/>
+  <text x="112" y="158" class="label">shared/</text>
+  <text x="112" y="180" class="small">共通sourceの正本</text>
+  <rect x="440" y="130" width="220" height="62" rx="9" fill="#ffffff" stroke="#b5791f"/>
+  <text x="472" y="158" class="label">scripts/validate.sh</text>
+  <text x="472" y="180" class="small">release gate</text>
+  <rect x="800" y="130" width="220" height="62" rx="9" fill="#ffffff" stroke="#b5791f"/>
+  <text x="832" y="158" class="label">tests / docs / policy</text>
+  <text x="832" y="180" class="small">開発・説明・運用</text>
+
+  <rect x="80" y="280" width="250" height="95" rx="12" fill="#edf2f8" stroke="#7d91aa" stroke-width="2"/>
+  <text x="110" y="316" class="label">Marketplace catalog</text>
+  <text x="110" y="344" class="body">plugin名・version・source</text>
+  <text x="110" y="365" class="small">runtime別adapter</text>
+
+  <rect x="425" y="260" width="290" height="135" rx="12" fill="#dcecff" stroke="#245f9e" stroke-width="3"/>
+  <text x="457" y="297" class="label">Leaf plugin root</text>
+  <text x="457" y="327" class="body">manifest / skill / playbook</text>
+  <text x="457" y="352" class="body">scripts / references / assets</text>
+  <text x="457" y="378" class="small">plugin内で自己完結</text>
+
+  <rect x="805" y="280" width="235" height="95" rx="12" fill="#eef8f1" stroke="#2f7a47" stroke-width="2"/>
+  <text x="835" y="316" class="label">外部plugin</text>
+  <text x="835" y="344" class="body">完全修飾した依存</text>
+  <text x="835" y="365" class="small">物理的には別package</text>
+
+  <rect x="425" y="475" width="290" height="75" rx="12" fill="#eef8f1" stroke="#2f7a47" stroke-width="2"/>
+  <text x="465" y="508" class="label">Codex / Claude Code runtime</text>
+  <text x="465" y="532" class="small">選択したpluginを発見・実行</text>
+
+  <path d="M330 327 L415 327" stroke="#245f9e" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
+  <text x="348" y="311" class="small">source選択</text>
+  <path d="M715 327 L795 327" stroke="#245f9e" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
+  <text x="730" y="311" class="small">requires</text>
+  <path d="M570 395 L570 465" stroke="#245f9e" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
+  <text x="585" y="438" class="small">install・実行</text>
+
+  <path d="M190 192 C220 245, 360 230, 440 275" stroke="#7d91aa" stroke-width="2" stroke-dasharray="8 7" fill="none" marker-end="url(#arrow-gray)"/>
+  <text x="260" y="232" class="small">開発時にcopy</text>
+  <path d="M550 192 L550 250" stroke="#7d91aa" stroke-width="2" stroke-dasharray="8 7" fill="none" marker-end="url(#arrow-gray)"/>
+  <text x="565" y="232" class="small">検査</text>
+  <path d="M660 160 C760 210, 760 245, 700 285" stroke="#7d91aa" stroke-width="2" stroke-dasharray="8 7" fill="none" marker-end="url(#arrow-gray)"/>
+  <text x="750" y="230" class="small">manifest・構成検査</text>
+
+  <line x1="65" y1="570" x2="120" y2="570" stroke="#245f9e" stroke-width="3"/>
+  <text x="130" y="575" class="small">実行時の選択・依存</text>
+  <line x1="330" y1="570" x2="385" y2="570" stroke="#7d91aa" stroke-width="2" stroke-dasharray="8 7"/>
+  <text x="395" y="575" class="small">開発時だけの同期・検査</text>
+</svg>
