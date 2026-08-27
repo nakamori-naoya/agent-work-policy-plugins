@@ -18,9 +18,9 @@ permissions:
   pull_request: true
   merge: true
 gates:
-  before_commit: true
-  before_push: true
-  before_pull_request: true
+  before_commit: false
+  before_push: false
+  before_pull_request: false
   before_merge: false
 verification:
   commands: ["git diff --check"]

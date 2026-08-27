@@ -4,18 +4,45 @@ repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを�
 
 ## インストール
 
-Codexでは、marketplaceを登録してpluginをインストールする。
+### Codex
+
+Codexのpluginコマンドには`--scope`がない。通常の手順はuser単位でmarketplaceとpluginを登録する。
 
 ```bash
 codex plugin marketplace add nakamori-naoya/agent-work-policy-plugins
 codex plugin add agent-work-policy@agent-work-policy
 ```
 
-Claude Codeでは、次のコマンドを実行する。
+このrepositoryだけに分離したい場合は、repository専用の`CODEX_HOME`を作り、インストール時と利用時に同じ値を指定する。
 
 ```bash
-claude plugin marketplace add nakamori-naoya/agent-work-policy-plugins
-claude plugin install agent-work-policy@agent-work-policy
+mkdir -p .codex-home
+export CODEX_HOME="$PWD/.codex-home"
+
+codex plugin marketplace add nakamori-naoya/agent-work-policy-plugins
+codex plugin add agent-work-policy@agent-work-policy
+codex
+```
+
+`CODEX_HOME`には認証、設定、ログ、session、plugin metadataも保存されるため、このdirectoryはGit管理しない。
+
+### Claude Code
+
+Claude Codeは次のscopeを選べる。
+
+| scope | 対象 |
+|---|---|
+| `user` | user全体。省略時の既定値 |
+| `project` | このrepositoryで有効にする設定をGitでチーム共有する |
+| `local` | このrepositoryで有効にするが、Git共有せず自分だけで使う |
+
+repository設定としてインストールする場合は`project`を指定する。`CLAUDE_PLUGIN_SCOPE`を`user`または`local`へ変えれば、同じ手順でscopeを切り替えられる。
+
+```bash
+CLAUDE_PLUGIN_SCOPE=project
+
+claude plugin marketplace add nakamori-naoya/agent-work-policy-plugins --scope "$CLAUDE_PLUGIN_SCOPE"
+claude plugin install agent-work-policy@agent-work-policy --scope "$CLAUDE_PLUGIN_SCOPE"
 ```
 
 ## 依存plugin
