@@ -2,6 +2,22 @@
 
 repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを解決するClaude Code/Codex両対応marketplaceである。
 
+## インストール
+
+Codexでは、marketplaceを登録してpluginをインストールする。
+
+```bash
+codex plugin marketplace add nakamori-naoya/agent-work-policy-plugins
+codex plugin add agent-work-policy@agent-work-policy
+```
+
+Claude Codeでは、次のコマンドを実行する。
+
+```bash
+claude plugin marketplace add nakamori-naoya/agent-work-policy-plugins
+claude plugin install agent-work-policy@agent-work-policy
+```
+
 ## 依存plugin
 
 `agent-work-policy@agent-work-policy`に外部pluginへの依存はない。

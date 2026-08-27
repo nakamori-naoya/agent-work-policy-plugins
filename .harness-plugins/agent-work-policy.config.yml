@@ -1,0 +1,39 @@
+# workspace: 作業場所とbranch規則。空のworktree_rootはOSの一時directoryを使う。
+# permissions: 操作を許すか。falseは人間の承認でも上書きできない。
+# gates: trueなら操作直前に依頼者の明示承認が要る。
+# verification: commit前に全て成功させるcommand。
+# merge.readiness: merge gateを提示してよい状態の機械条件。
+version: 1
+workspace:
+  use_worktree: false
+  require_clean_start: true
+  base_branch: main
+  branch_prefix: agent/
+  worktree_root: ""
+git:
+  remote: origin
+permissions:
+  commit: true
+  push: true
+  pull_request: true
+  merge: true
+gates:
+  before_commit: true
+  before_push: true
+  before_pull_request: true
+  before_merge: false
+verification:
+  commands: ["git diff --check"]
+pull_request:
+  draft: false
+merge:
+  method: squash
+  delete_branch: false
+  delete_worktree: false
+  readiness:
+    min_approvals: 0
+    require_checks_passed: true
+    require_no_unresolved_threads: true
+instructions:
+  execution:
+    directive: permissionを承認で上書きせず、readinessを満たしてからhuman gateを提示し、許された操作だけを実行する
