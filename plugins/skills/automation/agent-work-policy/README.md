@@ -62,6 +62,19 @@ permissionは「してよいか」、gateは「直前に依頼者の承認が要
 
 インストールしただけでは、他skillや素のgit操作を横取りしない。すべての変更作業へ適用する場合は、repositoryの `AGENTS.md` / `CLAUDE.md` から `work-with-policy` の利用を必須にする。
 
+## 他pluginへの公開操作API
+
+下流pluginは、対象repositoryの解決済み設定を`control.py`へ渡して公開操作を呼び出す。
+
+```bash
+CFG_FILE=$(bash "$POLICY_ROOT/scripts/prepare.sh" "$TARGET_REPO") || exit 2
+python3 "$POLICY_ROOT/scripts/control.py" permission --config "$CFG_FILE" --action pull_request
+python3 "$POLICY_ROOT/scripts/control.py" pull-request --config "$CFG_FILE" --repo "$TARGET_REPO" \
+  --title '<title>' --body-file '<body-file>'
+```
+
+入力、順序、stdout、exit、境界時の扱いは[公開操作契約](references/operation-contract.md#下流plugin向けcli契約)を正本にする。
+
 ## 配布文書
 
 | 文書 | 責務 |

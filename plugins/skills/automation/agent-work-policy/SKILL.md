@@ -34,6 +34,23 @@ trap 'rm -f "$CFG_FILE"' EXIT
 
 [設定値](references/settings.md)を解決済みYAMLから読み、[操作契約](references/operation-contract.md)を全操作へ適用する。
 
+## 下流pluginから公開操作を委譲する
+
+下流pluginは解決済み設定と対象repositoryを`control.py`へ渡す。
+
+```bash
+POLICY_ROOT="/absolute/path/to/agent-work-policy"
+TARGET_REPO="/absolute/path/to/repository-being-published"
+CFG_FILE=$(bash "$POLICY_ROOT/scripts/prepare.sh" "$TARGET_REPO") || exit 2
+trap 'rm -f "$CFG_FILE"' EXIT
+
+python3 "$POLICY_ROOT/scripts/control.py" permission --config "$CFG_FILE" --action pull_request
+python3 "$POLICY_ROOT/scripts/control.py" pull-request --config "$CFG_FILE" --repo "$TARGET_REPO" \
+  --title '<title>' --body-file '<body-file>'
+```
+
+入力、順序、stdout、exit、境界時の扱いは[公開委譲契約](references/operation-contract.md#下流plugin向けcli契約)を正本にする。
+
 ## 2. planして作業場所を開始する
 
 設定されたprefixにtask slugを足してbranchを決める。planの停止理由を解消してからstartし、返されたworktreeを以後の作業場所にする。

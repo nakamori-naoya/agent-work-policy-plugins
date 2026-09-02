@@ -21,7 +21,10 @@ while IFS= read -r pb; do
   cmp -s "$ROOT/shared/playbook/resolve.sh" "$root/scripts/resolve.sh" || failed=1
   cmp -s "$ROOT/shared/playbook/resolve-dependency.py" "$root/scripts/resolve-dependency.py" || failed=1
 done < <(find "$ROOT/plugins/playbooks" -name playbook.yml -type f 2>/dev/null | sort)
+cmp -s "$ROOT/shared/prepare.sh" "$ROOT/plugins/skills/automation/agent-work-policy/scripts/prepare.sh" || failed=1
+cmp -s "$ROOT/shared/skill/resolve.sh" "$ROOT/plugins/skills/automation/agent-work-policy/scripts/resolve.sh" || failed=1
 while IFS= read -r script; do bash -n "$script" || failed=1; done < <(find "$ROOT" -type f -name '*.sh' | sort)
 while IFS= read -r script; do PYTHONPYCACHEPREFIX="$TMP_ROOT/pycache" python3 -m py_compile "$script" || failed=1; done < <(find "$ROOT" -type f -name '*.py' | sort)
+bash "$ROOT/tests/publication-authority-contract.sh" || failed=1
 if [ "$failed" -eq 0 ]; then echo 'Validation: passed'; else echo 'Validation: failed'; fi
 [ "$failed" -eq 0 ]

@@ -1,21 +1,24 @@
 # Plugin repository 群のコード地図
 
-> 型: コード地図（マクロ） ／ 読み手: この workspace の plugin を追加・変更・レビューする人 ／ 対象: 7つの `*-plugins` repository
+> 型: コード地図（マクロ） ／ 読み手: この workspace の plugin を追加・変更・レビューする人 ／ 対象: 10の `*-plugins` repository
 
-- **固定した参照点**: 2026-08-27 時点の各 `main` HEAD。下表に commit を示す。
-- **扱う範囲**: Repository root、marketplace catalog、plugin root の配置と責務、7 repository 間の構成差。個別 plugin の処理順と業務内容は扱わない。
+- **固定した参照点**: 2026-09-02 時点の各 `main` HEAD。下表に commit を示す。
+- **扱う範囲**: Repository root、marketplace catalog、plugin root の配置と責務、10 repository 間の構成差。個別 plugin の処理順と業務内容は扱わない。
 
-> 一言でいうと——**7 repository は共通の配布骨格を持つが、構成は完全には同一でない。** 妥当な機能差と構成ドリフトを分けて管理する。
+> 一言でいうと——**10 repository は共通の配布骨格を持つが、構成は完全には同一でない。** 妥当な機能差と構成ドリフトを分けて管理する。
 
 | Repository | Commit | 配布 plugin 数 |
 |---|---|---:|
-| `agent-work-policy-plugins` | `d0ae30dd0c4d` | 1 |
-| `bdd-discovery-and-formulation-plugins` | `b1f00b266f0a` | 10 |
-| `collect-and-digest-plugins` | `cfec46b843b9` | 5 |
-| `grill-plugins` | `965f13d91b95` | 1 |
-| `product-planning-plugins` | `f41790975483` | 7 |
-| `pull-request-plugins` | `203b752cccf5` | 8 |
-| `write-doc-plugins` | `16c26afb594c` | 5 |
+| `agent-fleet-plugins` | `7c63a3c5394b` | 3 |
+| `agent-roles-plugins` | `09920b3f0e43` | 1 |
+| `agent-work-policy-plugins` | `8098900db80f` | 1 |
+| `bdd-discovery-and-formulation-plugins` | `4fb652b2c7d3` | 11 |
+| `collect-and-digest-plugins` | `e49df9ed69db` | 5 |
+| `grill-plugins` | `c986229cbf69` | 1 |
+| `product-planning-plugins` | `4ad48190b919` | 7 |
+| `pull-request-plugins` | `f8e48de00206` | 8 |
+| `skill-authoring-plugins` | `a341052ff10c` | 1 |
+| `write-doc-plugins` | `84a1aa534395` | 5 |
 
 ## ① 何をするシステムか
 
@@ -108,18 +111,18 @@
 
 ## ⑤ アーキテクチャ上の特徴
 
-**共通配布骨格は揃っているが、構成と検証方針には統一候補が残る。** 37 source pathはすべて `plugins/{skills|playbooks}/{領域}/{plugin}` の同じ深さにある。両runtimeのcatalogと両manifestも現在は一致し、7 repositoryのvalidationはすべて成功した。
+**共通配布骨格は揃っているが、構成と検証方針には統一候補が残る。** 43 source pathのうち38は `plugins/{skills|playbooks}/{領域}/{plugin}` の4段構成で、5つは領域を持たない別の深さである。両runtimeのcatalogと両manifestも現在は一致し、10 repositoryのvalidationはすべて成功した。
 
 ### 一貫性の評価
 
 | 観点 | 現状 | 判定 | 推奨 |
 |---|---|---|---|
-| Rootの必須骨格 | 7/7に`.agents`、`.claude-plugin`、`.harness-plugins`、`plugins`、`shared`、`scripts`、`AGENTS.md`、`README.md`がある | 一貫 | 必須骨格として維持する |
-| Plugin source path | 37/37が同じ4段構成 | 一貫 | `plugins/{skills|playbooks}/{領域}/{plugin}` に固定する |
-| Runtime間のidentity | 全37 entryでname、version、sourceが一致 | 一貫 | 全repositoryで同じvalidatorへ統一する |
-| Plugin rootの共通要素 | 37/37に両manifest、`README.md`、`scripts/`がある。`skills/`は36/37、root `SKILL.md`は35/37 | 一貫 | `doc-render`と`digest`のcapability由来の例外を規約へ固定する |
+| Rootの必須骨格 | 10/10に`.agents`、`.claude-plugin`、`.harness-plugins`、`plugins`、`scripts`、`AGENTS.md`、`README.md`があり、`shared/`は7/10にある | `shared/`は差異 | 共通骨格は維持し、`shared/`は共有資産が必要なrepositoryだけに置く |
+| Plugin source path | 38/43が4段構成で、5/43は領域を持たない別の深さ | 不一致 | catalogが指すplugin rootを正本とし、4段構成を一律に要求しない |
+| Runtime間のidentity | 全43 entryでname、version、sourceが一致 | 一貫 | 全repositoryで同じvalidatorへ統一する |
 | Symlink | Plugin source内に存在しない | 一貫 | Source境界を曖昧にするsymlinkを禁止する |
-| `.gitignore` | BDD、grill、write-docの3/7だけに存在 | 不一致 | 共通templateを7/7へ置くか、不要理由を規約化する |
+| `.gitignore` | 10/10に存在する | 一貫 | repository rootの共通要素として維持する |
+| Plugin rootの共通要素 | 43/43に両manifest、各39/43に`README.md`とroot `SKILL.md`（両方は36/43）、40/43に`scripts/`、41/43に`skills/`がある | Capability由来の差異 | manifestは必須、ほかはpluginのcapabilityに応じて配置する |
 | 追加testの置き場 | BDDは`scripts/validate-*.sh`、productは`tests/` | 不一致 | `scripts/validate.sh`を公開入口に保ち、詳細scenarioを`tests/`へ寄せる |
 | Playbook依存version | 5つのplaybook repositoryがmarketplace名とplugin名で解決し、versionを固定しない | 一貫 | 解決先のidentityと必要skillを全repositoryで検査する |
 | Product→grill依存 | Productはversionを固定せず、`grill@grill`を名前で解決する | 一貫 | Workspace横断testでlatest compatible versionを継続検査する |
@@ -135,12 +138,15 @@
 
 | Repository | 共通骨格からの主な追加・差異 | 評価 |
 |---|---|---|
+| `agent-fleet-plugins` | fleetの状態機械とruntime adapterを持つ | orchestration固有の実装として妥当 |
+| `agent-roles-plugins` | 複数agentの役割分担を定義する単一skill | 責務を実装作業から分離しており妥当 |
 | `agent-work-policy-plugins` | 単一skill。`shared/skill/`を持つ | 妥当 |
-| `bdd-discovery-and-formulation-plugins` | 10 plugin、専門知識の`shared/*`、`VALIDATION.md`、分割validator、空の`plugins/playbooks/authoring/` | 専門sharedと詳細検証は妥当。空directoryは整理候補 |
+| `bdd-discovery-and-formulation-plugins` | 11 plugin、専門知識の`shared/*`、`VALIDATION.md`、分割validator、空の`plugins/playbooks/authoring/` | 専門sharedと詳細検証は妥当。空directoryは整理候補 |
 | `collect-and-digest-plugins` | 3 skillと2 playbook。`digest`は複数skillを1 rootに収容 | 妥当 |
 | `grill-plugins` | 単一skill。題材固有の観点を持たない | 妥当 |
 | `product-planning-plugins` | `docs/exercises/`、`tests/`、`shared/product/` | 作例とscenario testとして妥当。依存versionは要確認 |
 | `pull-request-plugins` | Skillは個別prepare中心で、`shared/skill/`を持たない | 機能差として妥当。共通化要否は要確認 |
+| `skill-authoring-plugins` | skillを自己完結した配布物として作る単一skill | authoring責務として妥当 |
 | `write-doc-plugins` | `shared/playbook/state.py`、script-onlyの`doc-render` | Playbook状態管理とcapability差として妥当 |
 
 ### 機械検査の限界
