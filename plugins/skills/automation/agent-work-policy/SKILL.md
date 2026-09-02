@@ -47,6 +47,7 @@ trap 'rm -f "$CFG_FILE"' EXIT
 python3 "$POLICY_ROOT/scripts/control.py" permission --config "$CFG_FILE" --action pull_request
 python3 "$POLICY_ROOT/scripts/control.py" pull-request --config "$CFG_FILE" --repo "$TARGET_REPO" \
   --title '<title>' --body-file '<body-file>'
+python3 "$POLICY_ROOT/scripts/control.py" ready-for-review --config "$CFG_FILE" --repo "$TARGET_REPO" --pr <number>
 ```
 
 入力、順序、stdout、exit、境界時の扱いは[公開委譲契約](references/operation-contract.md#下流plugin向けcli契約)を正本にする。
@@ -86,6 +87,12 @@ python3 "${PLUGIN_ROOT}/scripts/control.py" pull-request --config "$CFG_FILE" --
 ## 6. readinessをpollしてmerge・片付けする
 
 readinessが未充足なら状態が変わるまで待って読み直す。readyになった後だけmerge permissionとgateを適用する。merge成功後は`${.merge.delete_worktree}`に従い、cleanな副worktreeだけを削除する。
+
+内部レビューが完了し、作成時のdraft設定によりPRが下書きなら、merge readinessの前にだけ次を呼ぶ。すでに公開済みなら外部変更なしで成功する。
+
+```bash
+python3 "${PLUGIN_ROOT}/scripts/control.py" ready-for-review --config "$CFG_FILE" --repo "$WORKTREE" --pr <number>
+```
 
 ```bash
 python3 "${PLUGIN_ROOT}/scripts/control.py" merge-readiness --config "$CFG_FILE" --repo "$WORKTREE" --pr <number>

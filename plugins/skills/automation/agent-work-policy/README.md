@@ -6,6 +6,7 @@ AIエージェントのGit作業を、repositoryごとの設定に従って開�
 
 - worktreeまたは現在checkout内の専用branchで作業を開始する
 - commit、push、PR作成、mergeを個別に禁止できる
+- 下書きPRを、内部レビュー完了後に冪等にready for reviewへ切り替える
 - 許可された操作でも、直前のhuman gateを必須にできる
 - review Approve数、checks、未解決threadからmerge readinessを判定する
 - merge成功後、設定に従ってcleanな副worktreeを削除する
@@ -71,9 +72,12 @@ CFG_FILE=$(bash "$POLICY_ROOT/scripts/prepare.sh" "$TARGET_REPO") || exit 2
 python3 "$POLICY_ROOT/scripts/control.py" permission --config "$CFG_FILE" --action pull_request
 python3 "$POLICY_ROOT/scripts/control.py" pull-request --config "$CFG_FILE" --repo "$TARGET_REPO" \
   --title '<title>' --body-file '<body-file>'
+python3 "$POLICY_ROOT/scripts/control.py" ready-for-review --config "$CFG_FILE" --repo "$TARGET_REPO" --pr <number>
 ```
 
 入力、順序、stdout、exit、境界時の扱いは[公開操作契約](references/operation-contract.md#下流plugin向けcli契約)を正本にする。
+
+PR作成時の設定がdraftであれば、内部レビュー完了後かつ`merge-readiness`の前に`ready-for-review`を呼ぶ。これは既存PRのレビュー受付状態を変える同じ`pull_request` permission内の遷移であり、新しい公開先やmergeを生まないため追加gateを持たない。すでに公開済みのPRは外部変更なしで成功する。
 
 ## 配布文書
 

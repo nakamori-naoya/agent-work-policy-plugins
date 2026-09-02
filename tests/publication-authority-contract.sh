@@ -30,6 +30,11 @@ expect_json() {
 }
 
 echo "Scenario: 下流pluginは設定を解決して公開判断を委譲する"
+if [ "$(rg -c --no-filename 'pull-request-state' "$PLUGIN/scripts/control.py")" -eq 1 ]; then
+  ok "PR状態の取得は単一helperに集約されている"
+else
+  ng "PR状態の取得が複数箇所に分散している"
+fi
 echo "  Given 公開先repositoryとagent-work-policy設定fixtureがある"
 mkdir -p "$TMP/repository/.harness-plugins"
 cp "$FIXTURE" "$TMP/repository/.harness-plugins/agent-work-policy.config.yml"
@@ -44,12 +49,17 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -eu
+if [ -n "${FAKE_GH_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+fi
 if [ "${FAKE_GH_MODE:-failed}" = failed ]; then
   echo 'fixture gh failure' >&2
   exit 1
 fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
-  printf '%s\n' '{"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"agent/delegate","headRefOid":"fixture-sha","baseRefName":"main","statusCheckRollup":[],"reviews":[],"url":"https://example.invalid/pr/1"}'
+  printf '{"number":1,"isDraft":%s,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"%s","headRefOid":"fixture-sha","baseRefName":"%s","statusCheckRollup":[],"reviews":[],"url":"https://example.invalid/pr/1"}\n' "${FAKE_PR_DRAFT:-false}" "${FAKE_PR_HEAD:-agent/delegate}" "${FAKE_PR_BASE:-main}"
+elif [ "$1" = pr ] && [ "$2" = ready ]; then
+  printf '%s\n' 'https://example.invalid/pr/1'
 elif [ "$1" = repo ] && [ "$2" = view ]; then
   printf '%s\n' '{"nameWithOwner":"fixture/repository"}'
 elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]]; then
@@ -97,6 +107,42 @@ expect_json 3 failed python3 "$PLUGIN/scripts/control.py" push --config "$CFG" -
 printf 'fixture body\n' > "$TMP/body.md"
 expect_json 3 waiting_for_human python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md"
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approved
+
+echo "  And ready-for-reviewはpull_request permissionと既存PR境界を再利用して冪等に公開する"
+: > "$TMP/gh.log"
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1 2>"$TMP/stderr")
+exit_code=$?
+if [ "$exit_code" -eq 0 ] && jq -e '.status == "ready" and .changed == true' <<<"$output" >/dev/null && rg -qx 'pr ready 1' "$TMP/gh.log"; then
+  ok "draft PR is made ready for review"
+else
+  ng "draft PR ready-for-review contract"
+fi
+: > "$TMP/gh.log"
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_PR_DRAFT=false python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1 2>"$TMP/stderr")
+exit_code=$?
+if [ "$exit_code" -eq 0 ] && jq -e '.status == "ready" and .changed == false' <<<"$output" >/dev/null && ! rg -q '^pr ready ' "$TMP/gh.log"; then
+  ok "ready PR is unchanged"
+else
+  ng "ready PR idempotency contract"
+fi
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 2
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_HEAD=agent/other python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_BASE=other python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
+cp "$FIXTURE" "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
+yq -i '.permissions.pull_request = false' "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
+mkdir -p "$TMP/pull-request-disabled/.harness-plugins"
+cp "$TMP/repository/.harness-plugins/pull-request-disabled.yml" "$TMP/pull-request-disabled/.harness-plugins/agent-work-policy.config.yml"
+git -C "$TMP/pull-request-disabled" init -q -b main
+git -C "$TMP/pull-request-disabled" config user.email fixture@example.invalid
+git -C "$TMP/pull-request-disabled" config user.name fixture
+touch "$TMP/pull-request-disabled/tracked"
+git -C "$TMP/pull-request-disabled" add tracked
+git -C "$TMP/pull-request-disabled" commit -qm initial
+git -C "$TMP/pull-request-disabled" switch -qc agent/delegate
+CFG_DISABLED=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/pull-request-disabled") || { ng "pull-request-disabled config resolves"; exit 1; }
+expect_json 3 forbidden python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG_DISABLED" --repo "$TMP/pull-request-disabled" --pr 1
+rm -f "$CFG_DISABLED"
 
 echo "  And merge-readinessとmergeはforbidden・gate待ち・失敗を区別する"
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG" --repo "$TMP/repository" --pr 1

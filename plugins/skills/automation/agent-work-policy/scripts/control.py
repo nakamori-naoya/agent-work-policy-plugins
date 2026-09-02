@@ -293,6 +293,23 @@ def gh_json(args, root, operation):
         emit({"error": "ghのJSONを読めない", "operation": operation, "detail": str(exc)}, 2)
 
 
+def pull_request_state(cfg, root, pr_number, branch=None):
+    view = gh_json(
+        [
+            "pr", "view", str(pr_number), "--json",
+            "number,isDraft,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,statusCheckRollup,reviews,url",
+        ],
+        root,
+        "pull-request-state",
+    )
+    return {
+        "view": view,
+        "pr_number_matches": view.get("number") == pr_number,
+        "head_branch_matches": branch is None or view.get("headRefName") == branch,
+        "base_branch_matches": view.get("baseRefName") == cfg["workspace"]["base_branch"],
+    }
+
+
 def repository_name(root):
     data = gh_json(["repo", "view", "--json", "nameWithOwner"], root, "repository-name")
     return data["nameWithOwner"]
@@ -349,14 +366,8 @@ query($owner:String!,$name:String!,$number:Int!){
 
 
 def merge_readiness(cfg, root, pr_number):
-    view = gh_json(
-        [
-            "pr", "view", str(pr_number), "--json",
-            "isDraft,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,statusCheckRollup,reviews,url",
-        ],
-        root,
-        "pull-request-state",
-    )
+    state = pull_request_state(cfg, root, pr_number)
+    view = state["view"]
     reasons = []
     approvals = approval_count(view.get("reviews"))
     required = cfg["merge"]["readiness"]
@@ -366,7 +377,7 @@ def merge_readiness(cfg, root, pr_number):
         reasons.append(f"mergeable:{view.get('mergeable')}")
     if view.get("mergeStateStatus") != "CLEAN":
         reasons.append(f"merge_state:{view.get('mergeStateStatus')}")
-    if view.get("baseRefName") != cfg["workspace"]["base_branch"]:
+    if not state["base_branch_matches"]:
         reasons.append("base_branch_mismatch")
     if approvals < required["min_approvals"]:
         reasons.append("approvals")
@@ -440,6 +451,33 @@ def do_pull_request(cfg, args):
     emit({"status": "created", "action": "pull_request", "branch": branch, "url": url})
 
 
+def do_ready_for_review(cfg, args):
+    root = repo_root(args.repo)
+    permission(cfg, "pull_request")
+    branch = safe_current_branch(cfg, root)
+    state = pull_request_state(cfg, root, args.pr, branch)
+    view = state["view"]
+    result = {
+        "action": "pull_request",
+        "pr": args.pr,
+        "url": view.get("url"),
+        "head_branch": view.get("headRefName"),
+        "base_branch": view.get("baseRefName"),
+    }
+    if not state["pr_number_matches"]:
+        emit({"status": "failed", **result, "reason": "pr_number_mismatch"}, 3)
+    if not state["head_branch_matches"]:
+        emit({"status": "failed", **result, "reason": "head_branch_mismatch", "expected_head_branch": branch}, 3)
+    expected_base = cfg["workspace"]["base_branch"]
+    if not state["base_branch_matches"]:
+        emit({"status": "failed", **result, "reason": "base_branch_mismatch", "expected_base_branch": expected_base}, 3)
+    if not view.get("isDraft"):
+        emit({"status": "ready", **result, "changed": False})
+    proc = command(["gh", "pr", "ready", str(args.pr)], cwd=root)
+    require_success(proc, "ready-for-review")
+    emit({"status": "ready", **result, "changed": True})
+
+
 def do_merge(cfg, args):
     root = repo_root(args.repo)
     permission(cfg, "merge")
@@ -491,7 +529,7 @@ def do_merge(cfg, args):
 def build_parser():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("preflight", "plan", "start", "permission", "gate", "commit", "push", "pull-request", "merge-readiness", "merge"):
+    for name in ("preflight", "plan", "start", "permission", "gate", "commit", "push", "pull-request", "ready-for-review", "merge-readiness", "merge"):
         item = sub.add_parser(name)
         item.add_argument("--config", required=True)
         if name not in {"permission", "gate"}:
@@ -508,7 +546,7 @@ def build_parser():
         if name == "pull-request":
             item.add_argument("--title", required=True)
             item.add_argument("--body-file", required=True)
-        if name in {"merge-readiness", "merge"}:
+        if name in {"ready-for-review", "merge-readiness", "merge"}:
             item.add_argument("--pr", required=True, type=int)
     return parser
 
@@ -546,6 +584,8 @@ def main():
         do_push(cfg, args)
     if args.command == "pull-request":
         do_pull_request(cfg, args)
+    if args.command == "ready-for-review":
+        do_ready_for_review(cfg, args)
     if args.command == "merge-readiness":
         root = repo_root(args.repo)
         ready = merge_readiness(cfg, root, args.pr)
