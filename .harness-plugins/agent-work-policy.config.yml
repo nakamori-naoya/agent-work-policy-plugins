@@ -27,7 +27,7 @@ verification:
 pull_request:
   draft: false
 merge:
-  method: squash
+  method: rebase
   delete_branch: true
   delete_worktree: false
   readiness:
