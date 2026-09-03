@@ -28,7 +28,7 @@ pull_request:
   draft: false
 merge:
   method: squash
-  delete_branch: false
+  delete_branch: true
   delete_worktree: false
   readiness:
     min_approvals: 0

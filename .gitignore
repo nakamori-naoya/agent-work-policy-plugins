@@ -6,6 +6,8 @@ __pycache__/
 # Repository-root allowlist
 # A new top-level path is ignored until it is explicitly approved here.
 /*
+!/LICENSE
+!/SECURITY.md
 !/.github/
 !/.agents/
 !/.claude-plugin/
