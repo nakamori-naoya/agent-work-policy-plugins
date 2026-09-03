@@ -500,11 +500,19 @@ def do_merge(cfg, args):
     branch_deleted = False
     if cfg["merge"]["delete_branch"]:
         validate_branch(cfg, root, ready["head_branch"])
-        proc = git(root, "push", cfg["git"]["remote"], "--delete", ready["head_branch"])
-        if proc.returncode:
-            failures.append({"operation": "delete_branch", "stderr": proc.stderr[-4000:].strip()})
-        else:
+        remote = cfg["git"]["remote"]
+        remote_ref = f"refs/heads/{ready['head_branch']}"
+        probe = git(root, "ls-remote", "--exit-code", "--heads", remote, remote_ref)
+        if probe.returncode == 2:
             branch_deleted = True
+        elif probe.returncode:
+            failures.append({"operation": "delete_branch", "stderr": probe.stderr[-4000:].strip()})
+        else:
+            proc = git(root, "push", remote, "--delete", ready["head_branch"])
+            if proc.returncode:
+                failures.append({"operation": "delete_branch", "stderr": proc.stderr[-4000:].strip()})
+            else:
+                branch_deleted = True
     worktree_cleanup = {"deleted": False, "reason": "disabled", "worktree": root}
     if cfg["merge"]["delete_worktree"]:
         validate_branch(cfg, root, ready["head_branch"])

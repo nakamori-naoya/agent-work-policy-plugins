@@ -21,6 +21,9 @@ readiness未充足の間はmerge承認を求めない。GitHub reviewのApprove�
 - ready-for-review: 内部レビュー完了後かつmerge readinessの前に必要なときだけ、既存PRの下書きを公開する。新しい公開先やmergeを生まないレビュー受付状態の遷移として、`pull_request` permissionだけを再利用し追加gateを持たない。既に公開済みなら外部変更なしで成功する。
 - merge: PR番号、head SHA、methodを使う。ready判定後も操作直前に状態を再取得し、成功後は設定に従ってremote branchと副worktreeを片付ける。
 
+remote branchの削除は冪等である。merge時点ですでに対象refが存在しなければ削除済みとして成功する。
+remote refの照会自体が通信・認証・権限などで失敗した場合は、削除済みと推測せずcleanup失敗を返す。
+
 scriptが`waiting_for_human`を返した場合だけ、対象を提示して承認を求める。承認を得ていない呼出しへ
 `--approved`を付けない。`forbidden`、`not_ready`、`verification_failed`を成功として扱わない。
 

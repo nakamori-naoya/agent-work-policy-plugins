@@ -65,7 +65,14 @@ elif [ "$1" = repo ] && [ "$2" = view ]; then
 elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]]; then
   printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}'
 elif [ "$1" = api ] && [[ " $* " == *' --method '* ]]; then
-  printf '%s\n' '{"merged":false,"message":"fixture merge failure"}'
+  if [ "${FAKE_GH_MODE:-}" = merged ]; then
+    if [ -n "${FAKE_REMOTE_DELETE_REF:-}" ]; then
+      git --git-dir "$FAKE_REMOTE_DELETE_REF" update-ref -d refs/heads/agent/delegate
+    fi
+    printf '%s\n' '{"merged":true,"sha":"fixture-merge-sha"}'
+  else
+    printf '%s\n' '{"merged":false,"message":"fixture merge failure"}'
+  fi
 else
   echo 'unexpected fixture gh invocation' >&2
   exit 1
@@ -163,6 +170,37 @@ CFG_MERGE=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/merge-enabled") || { ng "mer
 expect_json 3 waiting_for_human env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 --approved
 rm -f "$CFG_MERGE"
+
+echo "  And merge後にremote branchが既に無ければcleanupは冪等に成功する"
+cp "$FIXTURE" "$TMP/repository/.harness-plugins/merge-cleanup.yml"
+yq -i '.permissions.merge = true' "$TMP/repository/.harness-plugins/merge-cleanup.yml"
+yq -i '.gates.before_merge = false' "$TMP/repository/.harness-plugins/merge-cleanup.yml"
+yq -i '.merge.delete_branch = true' "$TMP/repository/.harness-plugins/merge-cleanup.yml"
+yq -i '.merge.readiness.min_approvals = 0' "$TMP/repository/.harness-plugins/merge-cleanup.yml"
+git init -q --bare "$TMP/remote.git"
+mkdir -p "$TMP/merge-cleanup/.harness-plugins"
+cp "$TMP/repository/.harness-plugins/merge-cleanup.yml" "$TMP/merge-cleanup/.harness-plugins/agent-work-policy.config.yml"
+git -C "$TMP/merge-cleanup" init -q -b main
+git -C "$TMP/merge-cleanup" config user.email fixture@example.invalid
+git -C "$TMP/merge-cleanup" config user.name fixture
+touch "$TMP/merge-cleanup/tracked"
+git -C "$TMP/merge-cleanup" add tracked
+git -C "$TMP/merge-cleanup" commit -qm initial
+git -C "$TMP/merge-cleanup" switch -qc agent/delegate
+git -C "$TMP/merge-cleanup" remote add origin "$TMP/remote.git"
+git -C "$TMP/merge-cleanup" push -q origin main agent/delegate
+CFG_CLEANUP=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/merge-cleanup") || { ng "merge-cleanup config resolves"; exit 1; }
+expect_json 0 merged env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=merged FAKE_REMOTE_DELETE_REF="$TMP/remote.git" python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_CLEANUP" --repo "$TMP/merge-cleanup" --pr 1
+if git --git-dir "$TMP/remote.git" show-ref --verify --quiet refs/heads/agent/delegate; then
+  ng "already absent remote branch remains"
+else
+  ok "already absent remote branch is successful cleanup"
+fi
+
+echo "  But remote照会の通信・権限相当エラーはcleanup失敗のまま返す"
+git -C "$TMP/merge-cleanup" remote set-url origin "$TMP/missing-remote.git"
+expect_json 3 merged_cleanup_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=merged python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_CLEANUP" --repo "$TMP/merge-cleanup" --pr 1
+rm -f "$CFG_CLEANUP"
 
 if [ "$FAIL" -eq 0 ]; then
   echo "Publication authority contract: passed"
