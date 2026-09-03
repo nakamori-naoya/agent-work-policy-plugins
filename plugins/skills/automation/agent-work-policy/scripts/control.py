@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 ACTIONS = ("commit", "push", "pull_request", "merge")
@@ -562,14 +563,22 @@ def fast_forward_merge(cfg, root, ready, branch):
             "stderr": remote_after.stderr[-4000:].strip(),
         }, 3)
     updated_sha = next((line.partition("\t")[0] for line in remote_after.stdout.splitlines()), None)
-    reflected = pull_request_state(cfg, root, ready["pr"])["view"]
-    if (
-        updated_sha != head_sha
-        or reflected.get("state") != "MERGED"
-        or not reflected.get("mergedAt")
-        or reflected.get("headRefOid") != head_sha
-        or reflected.get("baseRefOid") != head_sha
-    ):
+    reflected = {}
+    reflected_ok = False
+    for attempt in range(5):
+        reflected = pull_request_state(cfg, root, ready["pr"])["view"]
+        reflected_ok = (
+            updated_sha == head_sha
+            and reflected.get("state") == "MERGED"
+            and bool(reflected.get("mergedAt"))
+            and reflected.get("headRefOid") == head_sha
+            and reflected.get("baseRefOid") == head_sha
+        )
+        if reflected_ok:
+            break
+        if attempt < 4:
+            time.sleep(1)
+    if not reflected_ok:
         emit({
             "status": "merge_failed",
             "action": "merge",
