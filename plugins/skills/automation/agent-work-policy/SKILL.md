@@ -99,6 +99,12 @@ python3 "${PLUGIN_ROOT}/scripts/control.py" merge-readiness --config "$CFG_FILE"
 python3 "${PLUGIN_ROOT}/scripts/control.py" merge --config "$CFG_FILE" --repo "$WORKTREE" --pr <number> [--approved]
 ```
 
+`merge_partial`ではbase更新を再実行しない。GitHub上のPR状態を確認し、merge済みならcleanupだけを再開する。
+
+```bash
+python3 "${PLUGIN_ROOT}/scripts/control.py" cleanup --config "$CFG_FILE" --repo "$WORKTREE" --pr <number>
+```
+
 ## 7. 結果を報告する
 
 mode、branch、worktree、検証、commit、push先、PR、readiness、merge、worktree削除、停止理由、未実行操作を報告する。削除失敗をmerge成功だけで隠さない。repository全体への[有効化](references/activation.md)は別途行う。

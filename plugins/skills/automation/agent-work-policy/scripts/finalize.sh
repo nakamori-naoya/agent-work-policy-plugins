@@ -21,6 +21,7 @@ jq -e '
     (.readiness|type=="object" and (keys|sort)==["min_approvals","require_checks_passed","require_no_unresolved_threads"] and
       (.min_approvals|type=="number" and floor==. and .>=0 and .<=100) and
       (.require_checks_passed|type=="boolean") and (.require_no_unresolved_threads|type=="boolean"))) and
+  ((.merge.method!="fast-forward") or .merge.delete_branch) and
   ((.merge.delete_worktree|not) or .workspace.use_worktree) and
   (.instructions.execution.directive|type=="string" and length>0)
 ' >/dev/null <<<"$merged" \

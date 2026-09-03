@@ -19,10 +19,13 @@ readiness未充足の間はmerge承認を求めない。GitHub reviewのApprove�
 - push: 現在の作業branchと設定remoteを使う。force pushとbase branch pushを提供しない。
 - pull-request: title、body file、作業branch、base branch、draft設定を使う。
 - ready-for-review: 内部レビュー完了後かつmerge readinessの前に必要なときだけ、既存PRの下書きを公開する。新しい公開先やmergeを生まないレビュー受付状態の遷移として、`pull_request` permissionだけを再利用し追加gateを持たない。既に公開済みなら外部変更なしで成功する。
-- merge: PR番号、head SHA、merge前のbase SHA、methodを使う。ready判定後も操作直前に状態を再取得し、成功後は設定に従ってremote branchと副worktreeを片付ける。`fast-forward`ではlocal・PR・remoteのhead、PR・remoteのbase、祖先関係を照合し、head SHAをbaseへforceなしでpushする。push後はremote baseがhead SHAになったことと、GitHub上のPRが同じhead SHA・merge前base SHAでindirect mergeとして反映されたことを確認する。
+- merge: PR番号、head SHA、merge前のbase SHA、methodを使う。PRはOPENかつ同一repositoryのheadに限定し、更新直前にもchecksを含む状態を再取得する。`fast-forward`ではGitHub GraphQL `updateRefs`へbaseの`beforeOid=base SHA, afterOid=head SHA`とheadの`beforeOid=head SHA, afterOid=zero OID`を`force:false`で渡し、CAS更新とhead削除を原子的に行う。通常のpushやforce-with-leaseは使わない。更新後はremote baseとGitHub上のindirect merge反映を確認する。
+
+このCAS設計は、複数refを単一mutationで原子的に更新し、各refへ更新前後のOIDを指定できるGitHub公式の[GraphQL `updateRefs`](https://docs.github.com/en/graphql/reference/git#updaterefs)契約に基づく。
 
 remote branchの削除は冪等である。merge時点ですでに対象refが存在しなければ削除済みとして成功する。
 remote refの照会自体が通信・認証・権限などで失敗した場合は、削除済みと推測せずcleanup失敗を返す。
+削除対象が存在する場合はremote headがPR head SHAと一致するときだけ、`updateRefs`の`beforeOid`付き削除を行う。partial success後は`cleanup --pr`で同じCAS cleanupだけを再開できる。
 
 scriptが`waiting_for_human`を返した場合だけ、対象を提示して承認を求める。承認を得ていない呼出しへ
 `--approved`を付けない。`forbidden`、`not_ready`、`verification_failed`を成功として扱わない。
@@ -45,16 +48,19 @@ scriptが`waiting_for_human`を返した場合だけ、対象を提示して承�
 | `ready-for-review` | `--repo`、`--pr` | `pull_request` permissionを判定し、PR番号・現在branchとhead branch・設定baseとbase branchを照合する。draftなら`gh pr ready`を実行し、既にreadyなら外部変更しない |
 | `merge-readiness` | `--repo`、`--pr` | PRのApprove、checks、thread、base、headを再取得する |
 | `merge` | `--repo`、`--pr` | permissionを判定し、readinessを再取得してからgateを判定し、設定されたmethodでmergeする |
+| `cleanup` | `--repo`、`--pr` | merge済みPRと同一repository headを確認し、CAS branch cleanupを再開する |
 
 ### 結果
 
-`argparse`がcommandと必須引数を受理した呼出しでは、stdoutはJSON objectである。`argparse`による入力不備はusageをstderrへ出してexit `2`で終わるため、stdout JSONの保証外である。下流pluginはJSONが返った場合に最低限`status`を読み、成功時だけ後続工程へ進む。成功JSONは`status`に`allowed`、`approved`、`ready`、`committed`、`pushed`、`created`、`merged`のいずれかを持つ。`ready-for-review`の`ready`には`changed`があり、下書きを解除したときだけ`true`である。
+`argparse`がcommandと必須引数を受理した呼出しでは、stdoutはJSON objectである。`argparse`による入力不備はusageをstderrへ出してexit `2`で終わるため、stdout JSONの保証外である。下流pluginはJSONが返った場合に最低限`status`を読み、成功時だけ後続工程へ進む。成功JSONは`status`に`allowed`、`approved`、`ready`、`committed`、`pushed`、`created`、`merged`、`cleaned`のいずれかを持つ。`ready-for-review`の`ready`には`changed`があり、下書きを解除したときだけ`true`である。
 
 | exit | 意味 | 下流pluginの扱い |
 |---:|---|---|
 | 0 | 判定または操作が成功した | stdout JSONの`status`を記録し、成功した判定または操作だけを後続へ渡す |
 | 2 | 引数、設定、repository、依存commandが不正 | 公開操作を行わず停止する |
 | 3 | permission拒否、承認待ち、readiness不足、検証失敗、操作失敗 | `forbidden`、`waiting_for_human`、`not_ready`、`verification_failed`、`failed`、`merge_failed`、`merged_cleanup_failed`、`no_changes`などを成功へ変換せず停止・報告する |
+| 4 | base更新後にPR反映を確認できないpartial success | `merge_partial`、`base_updated:true`、実際のbase SHAを返す。mergeを再実行せず状態確認後に`cleanup`だけを再開する |
 
 `waiting_for_human`だけは承認待ちを示すJSONである。人間の承認を取得していない下流pluginは`--approved`を付けない。`merge-readiness`が`not_ready`の間は、下流pluginもhuman gateを提示しない。
 実行していない操作、取得できなかったPR状態、失敗したbranch・worktree削除を成功として報告しない。merge後の片付けだけが失敗した場合は`merged_cleanup_failed`として、merge済みであることと残った対象を同時に返す。
+解決済み設定の`repo_root`と`--repo`のcanonical pathは全repository操作で一致必須である。GitHub対象repository、設定remote、PR head repositoryも一致しなければ公開操作を行わない。

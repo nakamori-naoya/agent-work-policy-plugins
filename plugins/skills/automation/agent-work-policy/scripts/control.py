@@ -66,6 +66,18 @@ def repo_root(repo):
     return str(Path(proc.stdout.strip()).resolve())
 
 
+def bound_repo_root(cfg, repo):
+    root = repo_root(repo)
+    configured = str(Path(cfg.get("repo_root", "")).resolve())
+    if configured != root:
+        emit({
+            "error": "設定と対象repositoryが一致しない",
+            "configured_repo_root": configured,
+            "repo_root": root,
+        }, 2)
+    return root
+
+
 def git(root, *args):
     return command(["git", "-C", root, *args])
 
@@ -182,7 +194,7 @@ def base_exists(cfg, root):
 
 
 def workspace_plan(cfg, repo, branch):
-    root = repo_root(repo)
+    root = bound_repo_root(cfg, repo)
     validate_branch(cfg, root, branch, require_absent=True)
     base_exists(cfg, root)
     use_worktree = cfg["workspace"]["use_worktree"]
@@ -298,7 +310,7 @@ def pull_request_state(cfg, root, pr_number, branch=None):
     view = gh_json(
         [
             "pr", "view", str(pr_number), "--json",
-            "number,state,mergedAt,isDraft,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,baseRefOid,statusCheckRollup,reviews,url",
+            "number,state,mergedAt,isDraft,mergeable,mergeStateStatus,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,statusCheckRollup,reviews,url",
         ],
         root,
         "pull-request-state",
@@ -316,6 +328,60 @@ def repository_name(root):
     return data["nameWithOwner"]
 
 
+def repository_info(cfg, root):
+    data = gh_json(["repo", "view", "--json", "id,nameWithOwner,sshUrl,url"], root, "repository-identity")
+    remote_url = require_success(git(root, "remote", "get-url", cfg["git"]["remote"]), "remote-url", 2)
+    candidates = {data.get("sshUrl"), data.get("url"), f"{data.get('url')}.git"}
+    if remote_url not in candidates:
+        match = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", remote_url)
+        remote_name = f"{match.group(1)}/{match.group(2)}" if match else None
+        if not remote_name or remote_name.lower() != str(data.get("nameWithOwner", "")).lower():
+            emit({
+                "error": "GitHub対象とgit remoteが一致しない",
+                "github_repository": data.get("nameWithOwner"),
+                "remote": cfg["git"]["remote"],
+                "remote_url": remote_url,
+            }, 2)
+    return data
+
+
+ZERO_OID = "0000000000000000000000000000000000000000"
+
+
+def atomic_update_refs(root, repository_id, updates, operation):
+    rendered = ",".join(
+        "{"
+        f"name:{json.dumps(item['name'])},"
+        f"beforeOid:{json.dumps(item['before'])},"
+        f"afterOid:{json.dumps(item['after'])},"
+        "force:false"
+        "}"
+        for item in updates
+    )
+    query = (
+        "mutation { updateRefs(input:{"
+        f"repositoryId:{json.dumps(repository_id)},"
+        f"refUpdates:[{rendered}]"
+        "}) { clientMutationId } }"
+    )
+    proc = command(["gh", "api", "graphql", "-f", f"query={query}"], cwd=root)
+    if proc.returncode:
+        return {
+            "ok": False,
+            "operation": operation,
+            "exit_code": proc.returncode,
+            "stdout": proc.stdout[-4000:].strip(),
+            "stderr": proc.stderr[-4000:].strip(),
+        }
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        return {"ok": False, "operation": operation, "detail": str(exc)}
+    if not ((data.get("data") or {}).get("updateRefs")):
+        return {"ok": False, "operation": operation, "result": data}
+    return {"ok": True}
+
+
 def approval_count(reviews):
     latest = {}
     for review in reviews or []:
@@ -329,16 +395,33 @@ def approval_count(reviews):
     return sum(1 for review in latest.values() if review.get("state") == "APPROVED")
 
 
-def checks_passed(checks):
+def required_check_names(root, repo_name, base):
+    data = gh_json(
+        ["api", f"repos/{repo_name}/branches/{base}/protection/required_status_checks"],
+        root,
+        "required-status-checks",
+    )
+    return {
+        item
+        for item in [
+            *(data.get("contexts") or []),
+            *((check or {}).get("context") for check in (data.get("checks") or [])),
+        ]
+        if item
+    }
+
+
+def checks_passed(checks, required_names):
+    if not required_names:
+        return False
+    successful = set()
     for item in checks or []:
         conclusion = str(item.get("conclusion") or item.get("state") or "").upper()
-        status = str(item.get("status") or "").upper()
-        if conclusion in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
-            continue
-        if status == "COMPLETED" and not conclusion:
-            continue
-        return False
-    return True
+        if conclusion == "SUCCESS":
+            name = item.get("name") or item.get("context")
+            if name:
+                successful.add(name)
+    return required_names <= successful
 
 
 def unresolved_threads(root, repo_name, pr_number):
@@ -367,22 +450,35 @@ query($owner:String!,$name:String!,$number:Int!){
 
 
 def merge_readiness(cfg, root, pr_number):
+    info = repository_info(cfg, root)
     state = pull_request_state(cfg, root, pr_number)
     view = state["view"]
+    expected_repo = info["nameWithOwner"]
+    expected_owner = expected_repo.split("/", 1)[0]
+    head_repository = view.get("headRepository") or {}
+    head_owner = view.get("headRepositoryOwner") or {}
     reasons = []
     approvals = approval_count(view.get("reviews"))
     required = cfg["merge"]["readiness"]
     if view.get("isDraft"):
         reasons.append("draft")
+    if view.get("state") != "OPEN":
+        reasons.append(f"state:{view.get('state')}")
     if view.get("mergeable") != "MERGEABLE":
         reasons.append(f"mergeable:{view.get('mergeable')}")
     if view.get("mergeStateStatus") != "CLEAN":
         reasons.append(f"merge_state:{view.get('mergeStateStatus')}")
     if not state["base_branch_matches"]:
         reasons.append("base_branch_mismatch")
+    if (
+        head_repository.get("nameWithOwner") != expected_repo
+        or head_owner.get("login") != expected_owner
+    ):
+        reasons.append("cross_repository")
     if approvals < required["min_approvals"]:
         reasons.append("approvals")
-    passed = checks_passed(view.get("statusCheckRollup"))
+    required_names = required_check_names(root, expected_repo, view.get("baseRefName")) if required["require_checks_passed"] else set()
+    passed = checks_passed(view.get("statusCheckRollup"), required_names) if required["require_checks_passed"] else True
     if required["require_checks_passed"] and not passed:
         reasons.append("checks")
     unresolved = None
@@ -401,13 +497,14 @@ def merge_readiness(cfg, root, pr_number):
         "approvals": approvals,
         "required_approvals": required["min_approvals"],
         "checks_passed": passed,
+        "required_checks": sorted(required_names),
         "unresolved_threads": unresolved,
         "reasons": reasons,
     }
 
 
 def do_commit(cfg, args):
-    root = repo_root(args.repo)
+    root = bound_repo_root(cfg, args.repo)
     permission(cfg, "commit")
     branch = safe_current_branch(cfg, root)
     paths = safe_paths(root, args.paths_file)
@@ -426,7 +523,7 @@ def do_commit(cfg, args):
 
 
 def do_push(cfg, args):
-    root = repo_root(args.repo)
+    root = bound_repo_root(cfg, args.repo)
     permission(cfg, "push")
     branch = safe_current_branch(cfg, root)
     sha = require_success(git(root, "rev-parse", "HEAD"), "head-sha", 2)
@@ -436,10 +533,11 @@ def do_push(cfg, args):
 
 
 def do_pull_request(cfg, args):
-    root = repo_root(args.repo)
+    root = bound_repo_root(cfg, args.repo)
     permission(cfg, "pull_request")
     branch = safe_current_branch(cfg, root)
     gate(cfg, "pull_request", args.approved, {"branch": branch, "base": cfg["workspace"]["base_branch"], "title": args.title})
+    repository_info(cfg, root)
     cmd = [
         "pr", "create", "--base", cfg["workspace"]["base_branch"], "--head", branch,
         "--title", args.title, "--body-file", args.body_file,
@@ -454,8 +552,9 @@ def do_pull_request(cfg, args):
 
 
 def do_ready_for_review(cfg, args):
-    root = repo_root(args.repo)
+    root = bound_repo_root(cfg, args.repo)
     permission(cfg, "pull_request")
+    repository_info(cfg, root)
     branch = safe_current_branch(cfg, root)
     state = pull_request_state(cfg, root, args.pr, branch)
     view = state["view"]
@@ -546,13 +645,35 @@ def fast_forward_merge(cfg, root, ready, branch):
             "reason": "ancestry_check_failed",
             "stderr": ancestor.stderr[-4000:].strip(),
         }, 3)
-    pushed = git(root, "push", remote, f"{head_sha}:refs/heads/{base}")
-    if pushed.returncode:
+    latest = merge_readiness(cfg, root, ready["pr"])
+    if (
+        latest["status"] != "ready"
+        or latest["head_sha"] != head_sha
+        or latest["base_sha"] != base_sha
+        or latest["head_branch"] != ready["head_branch"]
+    ):
         emit({
             "status": "merge_failed",
             "action": "merge",
-            "reason": "fast_forward_push_failed",
-            "stderr": pushed.stderr[-4000:].strip(),
+            "reason": "readiness_changed",
+            "latest": latest,
+        }, 3)
+    info = repository_info(cfg, root)
+    updated = atomic_update_refs(
+        root,
+        info["id"],
+        [
+            {"name": f"refs/heads/{base}", "before": base_sha, "after": head_sha},
+            {"name": f"refs/heads/{ready['head_branch']}", "before": head_sha, "after": ZERO_OID},
+        ],
+        "fast-forward-update-refs",
+    )
+    if not updated["ok"]:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "atomic_ref_update_failed",
+            "detail": updated,
         }, 3)
     remote_after = git(root, "ls-remote", "--heads", remote, f"refs/heads/{base}")
     if remote_after.returncode:
@@ -580,20 +701,73 @@ def fast_forward_merge(cfg, root, ready, branch):
             time.sleep(1)
     if not reflected_ok:
         emit({
-            "status": "merge_failed",
+            "status": "merge_partial",
             "action": "merge",
             "reason": "pull_request_not_reflected",
+            "base_updated": True,
+            "merge_sha": head_sha,
             "remote_base_sha": updated_sha,
             "pr_state": reflected.get("state"),
             "pr_merged_at": reflected.get("mergedAt"),
             "pr_head_sha": reflected.get("headRefOid"),
             "pr_base_sha": reflected.get("baseRefOid"),
-        }, 3)
+        }, 4)
     return head_sha
 
 
+def cleanup_remote_branch(cfg, root, head_branch, head_sha):
+    validate_branch(cfg, root, head_branch)
+    remote = cfg["git"]["remote"]
+    remote_ref = f"refs/heads/{head_branch}"
+    probe = git(root, "ls-remote", "--exit-code", "--heads", remote, remote_ref)
+    if probe.returncode == 2:
+        return {"ok": True, "branch_deleted": True, "reason": "already_absent"}
+    if probe.returncode:
+        return {"ok": False, "operation": "delete_branch", "stderr": probe.stderr[-4000:].strip()}
+    remote_head = next((line.partition("\t")[0] for line in probe.stdout.splitlines()), None)
+    if remote_head != head_sha:
+        return {
+            "ok": False,
+            "operation": "delete_branch",
+            "reason": "remote_head_mismatch",
+            "remote_head_sha": remote_head,
+            "pr_head_sha": head_sha,
+        }
+    info = repository_info(cfg, root)
+    deleted = atomic_update_refs(
+        root,
+        info["id"],
+        [{"name": remote_ref, "before": head_sha, "after": ZERO_OID}],
+        "delete-branch",
+    )
+    if deleted["ok"]:
+        return {"ok": True, "branch_deleted": True, "reason": "deleted"}
+    after = git(root, "ls-remote", "--exit-code", "--heads", remote, remote_ref)
+    if after.returncode == 2:
+        return {"ok": True, "branch_deleted": True, "reason": "already_absent"}
+    return {"ok": False, "operation": "delete_branch", "detail": deleted}
+
+
+def cleanup_after_merge(cfg, root, head_branch, head_sha):
+    failures = []
+    branch_deleted = False
+    branch_cleanup = {"ok": True, "branch_deleted": False, "reason": "disabled"}
+    if cfg["merge"]["delete_branch"]:
+        branch_cleanup = cleanup_remote_branch(cfg, root, head_branch, head_sha)
+        branch_deleted = branch_cleanup.get("branch_deleted", False)
+        if not branch_cleanup["ok"]:
+            failures.append(branch_cleanup)
+    worktree_cleanup = {"deleted": False, "reason": "disabled", "worktree": root}
+    if cfg["merge"]["delete_worktree"]:
+        validate_branch(cfg, root, head_branch)
+        worktree_cleanup = remove_merged_worktree(root, head_branch)
+        if not worktree_cleanup["deleted"]:
+            failures.append({"operation": "delete_worktree", **worktree_cleanup})
+    return failures, branch_deleted, branch_cleanup, worktree_cleanup
+
+
 def do_merge(cfg, args):
-    root = repo_root(args.repo)
+    root = bound_repo_root(cfg, args.repo)
     permission(cfg, "merge")
     branch = safe_current_branch(cfg, root)
     ready = merge_readiness(cfg, root, args.pr)
@@ -615,29 +789,9 @@ def do_merge(cfg, args):
         if not result.get("merged"):
             emit({"status": "merge_failed", "action": "merge", "result": result}, 3)
         merge_sha = result.get("sha")
-    failures = []
-    branch_deleted = False
-    if cfg["merge"]["delete_branch"]:
-        validate_branch(cfg, root, ready["head_branch"])
-        remote = cfg["git"]["remote"]
-        remote_ref = f"refs/heads/{ready['head_branch']}"
-        probe = git(root, "ls-remote", "--exit-code", "--heads", remote, remote_ref)
-        if probe.returncode == 2:
-            branch_deleted = True
-        elif probe.returncode:
-            failures.append({"operation": "delete_branch", "stderr": probe.stderr[-4000:].strip()})
-        else:
-            proc = git(root, "push", remote, "--delete", ready["head_branch"])
-            if proc.returncode:
-                failures.append({"operation": "delete_branch", "stderr": proc.stderr[-4000:].strip()})
-            else:
-                branch_deleted = True
-    worktree_cleanup = {"deleted": False, "reason": "disabled", "worktree": root}
-    if cfg["merge"]["delete_worktree"]:
-        validate_branch(cfg, root, ready["head_branch"])
-        worktree_cleanup = remove_merged_worktree(root, ready["head_branch"])
-        if not worktree_cleanup["deleted"]:
-            failures.append({"operation": "delete_worktree", **worktree_cleanup})
+    failures, branch_deleted, branch_cleanup, worktree_cleanup = cleanup_after_merge(
+        cfg, root, ready["head_branch"], ready["head_sha"]
+    )
     payload = {
         "status": "merged_cleanup_failed" if failures else "merged",
         "action": "merge",
@@ -645,6 +799,41 @@ def do_merge(cfg, args):
         "merge_sha": merge_sha,
         "method": cfg["merge"]["method"],
         "branch_deleted": branch_deleted,
+        "branch_cleanup": branch_cleanup,
+        "worktree_cleanup": worktree_cleanup,
+    }
+    if failures:
+        payload["cleanup_failures"] = failures
+        emit(payload, 3)
+    emit(payload)
+
+
+def do_cleanup(cfg, args):
+    root = bound_repo_root(cfg, args.repo)
+    permission(cfg, "merge")
+    info = repository_info(cfg, root)
+    state = pull_request_state(cfg, root, args.pr)
+    view = state["view"]
+    expected_owner = info["nameWithOwner"].split("/", 1)[0]
+    head_repository = view.get("headRepository") or {}
+    head_owner = view.get("headRepositoryOwner") or {}
+    if (
+        view.get("state") != "MERGED"
+        or not view.get("mergedAt")
+        or not state["base_branch_matches"]
+        or head_repository.get("nameWithOwner") != info["nameWithOwner"]
+        or head_owner.get("login") != expected_owner
+    ):
+        emit({"status": "cleanup_failed", "action": "cleanup", "reason": "unsafe_pull_request_state"}, 3)
+    failures, branch_deleted, branch_cleanup, worktree_cleanup = cleanup_after_merge(
+        cfg, root, view["headRefName"], view["headRefOid"]
+    )
+    payload = {
+        "status": "cleanup_failed" if failures else "cleaned",
+        "action": "cleanup",
+        "pr": args.pr,
+        "branch_deleted": branch_deleted,
+        "branch_cleanup": branch_cleanup,
         "worktree_cleanup": worktree_cleanup,
     }
     if failures:
@@ -656,7 +845,7 @@ def do_merge(cfg, args):
 def build_parser():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("preflight", "plan", "start", "permission", "gate", "commit", "push", "pull-request", "ready-for-review", "merge-readiness", "merge"):
+    for name in ("preflight", "plan", "start", "permission", "gate", "commit", "push", "pull-request", "ready-for-review", "merge-readiness", "merge", "cleanup"):
         item = sub.add_parser(name)
         item.add_argument("--config", required=True)
         if name not in {"permission", "gate"}:
@@ -673,7 +862,7 @@ def build_parser():
         if name == "pull-request":
             item.add_argument("--title", required=True)
             item.add_argument("--body-file", required=True)
-        if name in {"ready-for-review", "merge-readiness", "merge"}:
+        if name in {"ready-for-review", "merge-readiness", "merge", "cleanup"}:
             item.add_argument("--pr", required=True, type=int)
     return parser
 
@@ -682,7 +871,7 @@ def main():
     args = build_parser().parse_args()
     cfg = load_config(args.config)
     if args.command == "preflight":
-        root = repo_root(args.repo)
+        root = bound_repo_root(cfg, args.repo)
         dirty = dirty_changes(root)
         emit(
             {
@@ -714,11 +903,13 @@ def main():
     if args.command == "ready-for-review":
         do_ready_for_review(cfg, args)
     if args.command == "merge-readiness":
-        root = repo_root(args.repo)
+        root = bound_repo_root(cfg, args.repo)
         ready = merge_readiness(cfg, root, args.pr)
         emit(ready, 0 if ready["status"] == "ready" else 3)
     if args.command == "merge":
         do_merge(cfg, args)
+    if args.command == "cleanup":
+        do_cleanup(cfg, args)
 
 
 if __name__ == "__main__":

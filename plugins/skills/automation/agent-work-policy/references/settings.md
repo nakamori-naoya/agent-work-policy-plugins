@@ -42,11 +42,11 @@ gateが`true`なら対象状態を提示し、実際に承認を得た再実行�
 
 ## merge
 
-- `${.merge.method}`: `squash` / `merge` / `rebase`はGitHub merge APIへ渡す。`fast-forward`は検査済みhead SHAをbaseへ非force pushする。
+- `${.merge.method}`: `squash` / `merge` / `rebase`はGitHub merge APIへ渡す。`fast-forward`はGraphQL `updateRefs`の`beforeOid`と`force:false`でbaseとheadをatomicに更新する。`fast-forward`では`delete_branch: true`が必須。
 - `${.merge.delete_branch}`: merge成功後にremote作業branchを削除するか。worktree削除とは別である。
 - `${.merge.delete_worktree}`: merge成功後にcleanな副worktreeを削除するか。`workspace.use_worktree: true`のときだけ有効にできる。
 - `${.merge.readiness.min_approvals}`: readyに必要な最新reviewのApprove数。`0`も有効である。
-- `${.merge.readiness.require_checks_passed}`: `true`なら全check成功をready条件にする。
+- `${.merge.readiness.require_checks_passed}`: `true`ならbase branch protectionのrequired check contextを取得し、1件以上ある全contextの存在と成功をready条件にする。取得不能・0件・欠落はfail-closed。
 - `${.merge.readiness.require_no_unresolved_threads}`: `true`なら未解決review threadが0件であることをready条件にする。
 
 設定値を報告用に列挙するだけで終わらせない。各値はworkspace作成、公開操作、停止、PR、mergeの該当箇所へ反映する。

@@ -57,9 +57,10 @@ instructions:
 
 permissionは「してよいか」、gateは「直前に依頼者の承認が要るか」である。GitHub reviewのApproveは依頼者の承認ではなく、merge readinessの条件である。
 
-`fast-forward`はGitHubにmerge commitを作らせず、検査済みPR headをbaseへ非force pushする。
-local・PR・remoteのhead SHA、PR・remoteのbase SHA、祖先関係を照合し、push後にGitHub上のPRが
-indirect mergeとして反映されたことまで確認する。
+`fast-forward`はGitHubにmerge commitを作らせず、GraphQL `updateRefs`で検査済みPR headをbaseへ進める。
+`beforeOid`と`force:false`を使い、base更新と同一repositoryのhead削除を1つのatomic mutationにする。
+local・PR・remoteのhead SHA、PR・remoteのbase SHA、祖先関係、branch protectionのrequired checksを照合し、
+更新後にGitHub上のPRがindirect mergeとして反映されたことまで確認する。
 
 既定ではcommit・push・PR作成を許すが、各操作の直前に承認を求める。mergeは既定で禁止し、worktreeやbranchは自動削除しない。`delete_worktree: true`はworktree modeでだけ設定でき、PRのhead branchをcheckoutしたcleanな副worktreeだけを削除する。
 
