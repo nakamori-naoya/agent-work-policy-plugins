@@ -12,6 +12,7 @@ for market in .agents/plugins/marketplace.json .claude-plugin/marketplace.json; 
   jq -r '.plugins[].name' "$ROOT/$market" | sort > "$TMP_ROOT/market"
   diff -u "$TMP_ROOT/expected" "$TMP_ROOT/market" >/dev/null || failed=1
 done
+bash "$ROOT/scripts/validate-marketplaces.sh" "$ROOT/.agents/plugins/marketplace.json" "$ROOT/.claude-plugin/marketplace.json" || failed=1
 while IFS='|' read -r name version rel; do
   jq -e --arg n "$name" --arg v "$version" '.name==$n and .version==$v' "$ROOT/$rel/.codex-plugin/plugin.json" "$ROOT/$rel/.claude-plugin/plugin.json" >/dev/null || failed=1
 done < <(jq -r '.plugins[] | [.name,.version,(.source.path | ltrimstr("./"))] | join("|")' "$ROOT/.agents/plugins/marketplace.json")
@@ -26,5 +27,6 @@ cmp -s "$ROOT/shared/skill/resolve.sh" "$ROOT/plugins/skills/automation/agent-wo
 while IFS= read -r script; do bash -n "$script" || failed=1; done < <(find "$ROOT" -type f -name '*.sh' | sort)
 while IFS= read -r script; do PYTHONPYCACHEPREFIX="$TMP_ROOT/pycache" python3 -m py_compile "$script" || failed=1; done < <(find "$ROOT" -type f -name '*.py' | sort)
 bash "$ROOT/tests/publication-authority-contract.sh" || failed=1
+bash "$ROOT/tests/marketplace-contract.sh" || failed=1
 if [ "$failed" -eq 0 ]; then echo 'Validation: passed'; else echo 'Validation: failed'; fi
 [ "$failed" -eq 0 ]

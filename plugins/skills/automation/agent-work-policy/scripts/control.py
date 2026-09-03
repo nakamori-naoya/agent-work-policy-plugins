@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import unquote, urlparse
 
 
 ACTIONS = ("commit", "push", "pull_request", "merge")
@@ -333,9 +334,32 @@ def repository_info(cfg, root):
     remote_url = require_success(git(root, "remote", "get-url", cfg["git"]["remote"]), "remote-url", 2)
     candidates = {data.get("sshUrl"), data.get("url"), f"{data.get('url')}.git"}
     if remote_url not in candidates:
-        match = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", remote_url)
-        remote_name = f"{match.group(1)}/{match.group(2)}" if match else None
-        if not remote_name or remote_name.lower() != str(data.get("nameWithOwner", "")).lower():
+        web = urlparse(str(data.get("url") or ""))
+        expected_host = web.hostname
+        remote_host = None
+        remote_name = None
+        scp = re.fullmatch(r"git@([^/:?#]+):([^/:?#]+)/([^/:?#]+?)(?:\.git)?", remote_url)
+        if scp:
+            remote_host = scp.group(1)
+            remote_name = f"{scp.group(2)}/{scp.group(3)}"
+        else:
+            parsed = urlparse(remote_url)
+            allowed_user = parsed.scheme == "ssh" and parsed.username == "git" and parsed.password is None
+            no_credentials = parsed.username is None and parsed.password is None
+            clean = (
+                parsed.scheme in {"https", "ssh"}
+                and (no_credentials or allowed_user)
+                and not parsed.query
+                and not parsed.fragment
+                and not parsed.params
+                and unquote(parsed.path) == parsed.path
+            )
+            parts = parsed.path.removeprefix("/").split("/") if clean else []
+            if len(parts) == 2 and all(parts):
+                remote_host = parsed.hostname
+                repository = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
+                remote_name = f"{parts[0]}/{repository}"
+        if remote_host != expected_host or remote_name != data.get("nameWithOwner"):
             emit({
                 "error": "GitHub対象とgit remoteが一致しない",
                 "github_repository": data.get("nameWithOwner"),
@@ -377,7 +401,7 @@ def atomic_update_refs(root, repository_id, updates, operation):
         data = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
         return {"ok": False, "operation": operation, "detail": str(exc)}
-    if not ((data.get("data") or {}).get("updateRefs")):
+    if data.get("errors") or not ((data.get("data") or {}).get("updateRefs")):
         return {"ok": False, "operation": operation, "result": data}
     return {"ok": True}
 
@@ -395,33 +419,109 @@ def approval_count(reviews):
     return sum(1 for review in latest.values() if review.get("state") == "APPROVED")
 
 
-def required_check_names(root, repo_name, base):
-    data = gh_json(
-        ["api", f"repos/{repo_name}/branches/{base}/protection/required_status_checks"],
+def branch_protection(root, repo_name, base):
+    return gh_json(
+        ["api", f"repos/{repo_name}/branches/{base}/protection"],
         root,
-        "required-status-checks",
+        "branch-protection",
     )
-    return {
-        item
-        for item in [
-            *(data.get("contexts") or []),
-            *((check or {}).get("context") for check in (data.get("checks") or [])),
+
+
+def required_checks(protection):
+    status = protection.get("required_status_checks") or {}
+    checks = status.get("checks") or []
+    if checks:
+        return [
+            {"context": item.get("context"), "app_id": item.get("app_id"), "kind": "check_run"}
+            for item in checks
+            if item and item.get("context")
         ]
-        if item
-    }
+    return [
+        {"context": context, "app_id": None, "kind": "context"}
+        for context in (status.get("contexts") or [])
+        if context
+    ]
 
 
-def checks_passed(checks, required_names):
-    if not required_names:
+def commit_check_runs(root, repo_name, head_sha):
+    owner, name = repo_name.split("/", 1)
+    query = """
+query($owner:String!,$name:String!,$oid:GitObjectID!){
+  repository(owner:$owner,name:$name){
+    object(oid:$oid){... on Commit{
+      checkSuites(first:100){
+        nodes{app{databaseId} checkRuns(first:100){nodes{name status conclusion startedAt completedAt} pageInfo{hasNextPage}}}
+        pageInfo{hasNextPage}
+      }
+    }}
+  }
+}
+"""
+    data = gh_json(
+        [
+            "api", "graphql", "-f", f"query={query}", "-F", f"owner={owner}",
+            "-F", f"name={name}", "-F", f"oid={head_sha}",
+        ],
+        root,
+        "check-runs",
+    )
+    repository = (data.get("data") or {}).get("repository") or {}
+    commit = repository.get("object") or {}
+    suites = commit.get("checkSuites") or {}
+    nodes = suites.get("nodes")
+    if nodes is None or (suites.get("pageInfo") or {}).get("hasNextPage"):
+        emit({"error": "check suiteを完全に取得できない"}, 2)
+    runs = []
+    for suite in nodes:
+        check_runs = (suite or {}).get("checkRuns") or {}
+        if (check_runs.get("pageInfo") or {}).get("hasNextPage"):
+            emit({"error": "check runを完全に取得できない"}, 2)
+        app_id = ((suite or {}).get("app") or {}).get("databaseId")
+        for run in check_runs.get("nodes") or []:
+            runs.append({**run, "app_id": app_id})
+    return runs
+
+
+def checks_passed(rollup, requirements, check_runs):
+    if not requirements:
         return False
-    successful = set()
-    for item in checks or []:
+    successful_contexts = set()
+    for item in rollup or []:
         conclusion = str(item.get("conclusion") or item.get("state") or "").upper()
         if conclusion == "SUCCESS":
             name = item.get("name") or item.get("context")
             if name:
-                successful.add(name)
-    return required_names <= successful
+                successful_contexts.add(name)
+    latest_runs = {}
+    for item in check_runs or []:
+        key = (item.get("name"), item.get("app_id"))
+        if not key[0] or key[1] is None:
+            continue
+        order = item.get("completedAt") or item.get("startedAt") or ""
+        previous = latest_runs.get(key)
+        if previous is None or order >= previous[0]:
+            latest_runs[key] = (order, item)
+    successful_runs = {
+        key
+        for key, (_, item) in latest_runs.items()
+        if str(item.get("status") or "").upper() == "COMPLETED"
+        and str(item.get("conclusion") or "").upper() == "SUCCESS"
+    }
+    for required in requirements:
+        context = required["context"]
+        if required["kind"] == "context":
+            if context not in successful_contexts:
+                return False
+            continue
+        if context not in successful_contexts:
+            return False
+        app_id = required.get("app_id")
+        if app_id is None or app_id == -1:
+            if not any(name == context for name, _ in successful_runs):
+                return False
+        elif (context, app_id) not in successful_runs:
+            return False
+    return True
 
 
 def unresolved_threads(root, repo_name, pr_number):
@@ -449,8 +549,8 @@ query($owner:String!,$name:String!,$number:Int!){
     return sum(1 for item in threads["nodes"] if not item["isResolved"])
 
 
-def merge_readiness(cfg, root, pr_number):
-    info = repository_info(cfg, root)
+def merge_readiness(cfg, root, pr_number, info=None):
+    info = info or repository_info(cfg, root)
     state = pull_request_state(cfg, root, pr_number)
     view = state["view"]
     expected_repo = info["nameWithOwner"]
@@ -477,13 +577,26 @@ def merge_readiness(cfg, root, pr_number):
         reasons.append("cross_repository")
     if approvals < required["min_approvals"]:
         reasons.append("approvals")
-    required_names = required_check_names(root, expected_repo, view.get("baseRefName")) if required["require_checks_passed"] else set()
-    passed = checks_passed(view.get("statusCheckRollup"), required_names) if required["require_checks_passed"] else True
+    protection = branch_protection(root, expected_repo, view.get("baseRefName"))
+    requirements = required_checks(protection) if required["require_checks_passed"] else []
+    check_runs = commit_check_runs(root, expected_repo, view.get("headRefOid")) if any(item["kind"] == "check_run" for item in requirements) else []
+    passed = checks_passed(view.get("statusCheckRollup"), requirements, check_runs) if required["require_checks_passed"] else True
     if required["require_checks_passed"] and not passed:
         reasons.append("checks")
+    protected_reviews = protection.get("required_pull_request_reviews") or {}
+    protected_approvals = protected_reviews.get("required_approving_review_count") or 0
+    protect_fast_forward = cfg["merge"]["method"] == "fast-forward"
+    if protect_fast_forward and required["min_approvals"] > protected_approvals:
+        reasons.append("protection:approvals")
+    conversation_protected = bool((protection.get("required_conversation_resolution") or {}).get("enabled"))
+    if protect_fast_forward and required["require_no_unresolved_threads"] and not conversation_protected:
+        reasons.append("protection:conversation_resolution")
+    admins_protected = bool((protection.get("enforce_admins") or {}).get("enabled"))
+    if protect_fast_forward and not admins_protected:
+        reasons.append("protection:admins")
     unresolved = None
     if required["require_no_unresolved_threads"]:
-        unresolved = unresolved_threads(root, repository_name(root), pr_number)
+        unresolved = unresolved_threads(root, expected_repo, pr_number)
         if unresolved:
             reasons.append("unresolved_threads")
     return {
@@ -497,7 +610,10 @@ def merge_readiness(cfg, root, pr_number):
         "approvals": approvals,
         "required_approvals": required["min_approvals"],
         "checks_passed": passed,
-        "required_checks": sorted(required_names),
+        "required_checks": requirements,
+        "protected_approvals": protected_approvals,
+        "conversation_resolution_protected": conversation_protected,
+        "admins_protected": admins_protected,
         "unresolved_threads": unresolved,
         "reasons": reasons,
     }
@@ -645,7 +761,8 @@ def fast_forward_merge(cfg, root, ready, branch):
             "reason": "ancestry_check_failed",
             "stderr": ancestor.stderr[-4000:].strip(),
         }, 3)
-    latest = merge_readiness(cfg, root, ready["pr"])
+    info = repository_info(cfg, root)
+    latest = merge_readiness(cfg, root, ready["pr"], info)
     if (
         latest["status"] != "ready"
         or latest["head_sha"] != head_sha
@@ -658,7 +775,6 @@ def fast_forward_merge(cfg, root, ready, branch):
             "reason": "readiness_changed",
             "latest": latest,
         }, 3)
-    info = repository_info(cfg, root)
     updated = atomic_update_refs(
         root,
         info["id"],

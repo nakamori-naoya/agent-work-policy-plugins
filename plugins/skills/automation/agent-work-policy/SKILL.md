@@ -101,6 +101,8 @@ python3 "${PLUGIN_ROOT}/scripts/control.py" merge --config "$CFG_FILE" --repo "$
 
 `merge_partial`ではbase更新を再実行しない。GitHub上のPR状態を確認し、merge済みならcleanupだけを再開する。
 
+required checkがGitHub Appへ固定されている場合、同名の別Appやlegacy StatusContextを成功へ読み替えない。readiness取得不能や100件を超えて完全取得できない場合も停止する。
+
 ```bash
 python3 "${PLUGIN_ROOT}/scripts/control.py" cleanup --config "$CFG_FILE" --repo "$WORKTREE" --pr <number>
 ```

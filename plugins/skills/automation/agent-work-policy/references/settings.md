@@ -46,7 +46,9 @@ gateが`true`なら対象状態を提示し、実際に承認を得た再実行�
 - `${.merge.delete_branch}`: merge成功後にremote作業branchを削除するか。worktree削除とは別である。
 - `${.merge.delete_worktree}`: merge成功後にcleanな副worktreeを削除するか。`workspace.use_worktree: true`のときだけ有効にできる。
 - `${.merge.readiness.min_approvals}`: readyに必要な最新reviewのApprove数。`0`も有効である。
-- `${.merge.readiness.require_checks_passed}`: `true`ならbase branch protectionのrequired check contextを取得し、1件以上ある全contextの存在と成功をready条件にする。取得不能・0件・欠落はfail-closed。
+- `${.merge.readiness.require_checks_passed}`: `true`ならbase branch protectionのrequired checkを取得し、1件以上ある全checkの存在と成功をready条件にする。`checks[].app_id`が正の値ならhead commitのCheckRun名とGitHub App database IDの両方を照合する。`null`または`-1`は任意Appの同名CheckRunを許すが、legacy StatusContextでは満たせない。`checks`がなく`contexts`だけなら名前で照合する。取得不能・0件・欠落・100件超で完全取得できない場合はfail-closed。
 - `${.merge.readiness.require_no_unresolved_threads}`: `true`なら未解決review threadが0件であることをready条件にする。
+
+`fast-forward`ではbranch protectionのrequired approvalsが`${.merge.readiness.min_approvals}`以上であり、conversation resolutionが要求時にserver側でも必須で、administratorにも保護が適用されることを確認する。policy判定より弱いserver protectionでは更新しない。
 
 設定値を報告用に列挙するだけで終わらせない。各値はworkspace作成、公開操作、停止、PR、mergeの該当箇所へ反映する。

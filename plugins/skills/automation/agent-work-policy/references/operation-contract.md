@@ -23,6 +23,10 @@ readiness未充足の間はmerge承認を求めない。GitHub reviewのApprove�
 
 このCAS設計は、複数refを単一mutationで原子的に更新し、各refへ更新前後のOIDを指定できるGitHub公式の[GraphQL `updateRefs`](https://docs.github.com/en/graphql/reference/git#updaterefs)契約に基づく。
 
+fast-forward直前の2回目readinessでは、PR state、draft、mergeable、merge state、head/base、review、required checkの名前とApp、review threadを再取得する。repository identityはそのreadinessより前に確定し、readinessの最後の応答から`updateRefs`まで追加のnetwork照会を挟まない。base/head SHAのraceは`beforeOid`で閉じる。required check、approval、conversation resolutionはpolicy要求以上のbranch protectionがserver側にも存在しadministratorへ適用されることを確認し、更新時のserver判定へ委ねる。ただし、別のrulesetやactor固有のbypass権限まではこのAPI応答から証明できない。PR state、draft、mergeable、merge stateには`updateRefs`の原子条件がないため、最後のreadiness応答後にも不可避のraceが残る。これらは窓を最小化しても完全には閉じられず、更新後のPR反映検査と`merge_partial`で検出する。
+
+GitHub repository identityとgit remoteのfallback照合は、GitHub API URLのhostと`nameWithOwner`へ一致する完全なrepository URLだけを許す。HTTPS、`ssh://git@host/owner/repo.git`、`git@host:owner/repo.git`を対象とし、余分なpath、query、fragment、credential、host内に見せかけた文字列を拒否する。API URL由来のhostを使うためGitHub Enterprise Serverにも同じ境界を適用する。
+
 remote branchの削除は冪等である。merge時点ですでに対象refが存在しなければ削除済みとして成功する。
 remote refの照会自体が通信・認証・権限などで失敗した場合は、削除済みと推測せずcleanup失敗を返す。
 削除対象が存在する場合はremote headがPR head SHAと一致するときだけ、`updateRefs`の`beforeOid`付き削除を行う。partial success後は`cleanup --pr`で同じCAS cleanupだけを再開できる。

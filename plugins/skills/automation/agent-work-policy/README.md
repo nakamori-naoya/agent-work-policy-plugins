@@ -59,6 +59,7 @@ permissionは「してよいか」、gateは「直前に依頼者の承認が要
 
 `fast-forward`はGitHubにmerge commitを作らせず、GraphQL `updateRefs`で検査済みPR headをbaseへ進める。
 `beforeOid`と`force:false`を使い、base更新と同一repositoryのhead no-op CASを1つのatomic mutationにする。head branchはGitHubのindirect merge反映を確認した後に、別のCAS mutationで削除する。
+required checkにGitHub App IDが指定されている場合は、head commitのCheckRun名とApp database IDをともに照合する。merge直前の再readiness後は追加のnetwork照会を挟まずCASを送信する。
 local・PR・remoteのhead SHA、PR・remoteのbase SHA、祖先関係、branch protectionのrequired checksを照合し、
 更新後にGitHub上のPRがindirect mergeとして反映されたことまで確認する。
 
