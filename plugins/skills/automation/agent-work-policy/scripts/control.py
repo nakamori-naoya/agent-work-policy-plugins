@@ -297,7 +297,7 @@ def pull_request_state(cfg, root, pr_number, branch=None):
     view = gh_json(
         [
             "pr", "view", str(pr_number), "--json",
-            "number,isDraft,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,statusCheckRollup,reviews,url",
+            "number,state,mergedAt,isDraft,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,baseRefOid,statusCheckRollup,reviews,url",
         ],
         root,
         "pull-request-state",
@@ -396,6 +396,7 @@ def merge_readiness(cfg, root, pr_number):
         "head_branch": view.get("headRefName"),
         "head_sha": view.get("headRefOid"),
         "base_branch": view.get("baseRefName"),
+        "base_sha": view.get("baseRefOid"),
         "approvals": approvals,
         "required_approvals": required["min_approvals"],
         "checks_passed": passed,
@@ -478,24 +479,133 @@ def do_ready_for_review(cfg, args):
     emit({"status": "ready", **result, "changed": True})
 
 
+def fast_forward_merge(cfg, root, ready, branch):
+    remote = cfg["git"]["remote"]
+    base = ready["base_branch"]
+    head_sha = ready["head_sha"]
+    base_sha = ready["base_sha"]
+    local_head = require_success(git(root, "rev-parse", "HEAD"), "head-sha", 2)
+    if branch != ready["head_branch"] or local_head != head_sha:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "local_head_mismatch",
+            "branch": branch,
+            "local_head_sha": local_head,
+            "pr_head_branch": ready["head_branch"],
+            "pr_head_sha": head_sha,
+        }, 3)
+    refs = {
+        f"refs/heads/{ready['head_branch']}": None,
+        f"refs/heads/{base}": None,
+    }
+    probe = git(root, "ls-remote", "--heads", remote, *refs)
+    if probe.returncode:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "remote_ref_lookup_failed",
+            "stderr": probe.stderr[-4000:].strip(),
+        }, 3)
+    for line in probe.stdout.splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref in refs:
+            refs[ref] = sha
+    remote_head = refs[f"refs/heads/{ready['head_branch']}"]
+    remote_base = refs[f"refs/heads/{base}"]
+    if remote_head != head_sha:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "remote_head_mismatch",
+            "remote_head_sha": remote_head,
+            "pr_head_sha": head_sha,
+        }, 3)
+    if remote_base != base_sha:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "remote_base_mismatch",
+            "remote_base_sha": remote_base,
+            "pr_base_sha": base_sha,
+        }, 3)
+    ancestor = git(root, "merge-base", "--is-ancestor", base_sha, head_sha)
+    if ancestor.returncode == 1:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "non_fast_forward",
+            "base_sha": base_sha,
+            "head_sha": head_sha,
+        }, 3)
+    if ancestor.returncode:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "ancestry_check_failed",
+            "stderr": ancestor.stderr[-4000:].strip(),
+        }, 3)
+    pushed = git(root, "push", remote, f"{head_sha}:refs/heads/{base}")
+    if pushed.returncode:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "fast_forward_push_failed",
+            "stderr": pushed.stderr[-4000:].strip(),
+        }, 3)
+    remote_after = git(root, "ls-remote", "--heads", remote, f"refs/heads/{base}")
+    if remote_after.returncode:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "remote_verification_failed",
+            "stderr": remote_after.stderr[-4000:].strip(),
+        }, 3)
+    updated_sha = next((line.partition("\t")[0] for line in remote_after.stdout.splitlines()), None)
+    reflected = pull_request_state(cfg, root, ready["pr"])["view"]
+    if (
+        updated_sha != head_sha
+        or reflected.get("state") != "MERGED"
+        or not reflected.get("mergedAt")
+        or reflected.get("headRefOid") != head_sha
+        or reflected.get("baseRefOid") != head_sha
+    ):
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "pull_request_not_reflected",
+            "remote_base_sha": updated_sha,
+            "pr_state": reflected.get("state"),
+            "pr_merged_at": reflected.get("mergedAt"),
+            "pr_head_sha": reflected.get("headRefOid"),
+            "pr_base_sha": reflected.get("baseRefOid"),
+        }, 3)
+    return head_sha
+
+
 def do_merge(cfg, args):
     root = repo_root(args.repo)
     permission(cfg, "merge")
+    branch = safe_current_branch(cfg, root)
     ready = merge_readiness(cfg, root, args.pr)
     if ready["status"] != "ready":
         emit(ready, 3)
     gate(cfg, "merge", args.approved, ready)
-    repo_name = repository_name(root)
-    result = gh_json(
-        [
-            "api", "--method", "PUT", f"repos/{repo_name}/pulls/{args.pr}/merge",
-            "-f", f"merge_method={cfg['merge']['method']}", "-f", f"sha={ready['head_sha']}",
-        ],
-        root,
-        "merge",
-    )
-    if not result.get("merged"):
-        emit({"status": "merge_failed", "action": "merge", "result": result}, 3)
+    if cfg["merge"]["method"] == "fast-forward":
+        merge_sha = fast_forward_merge(cfg, root, ready, branch)
+    else:
+        repo_name = repository_name(root)
+        result = gh_json(
+            [
+                "api", "--method", "PUT", f"repos/{repo_name}/pulls/{args.pr}/merge",
+                "-f", f"merge_method={cfg['merge']['method']}", "-f", f"sha={ready['head_sha']}",
+            ],
+            root,
+            "merge",
+        )
+        if not result.get("merged"):
+            emit({"status": "merge_failed", "action": "merge", "result": result}, 3)
+        merge_sha = result.get("sha")
     failures = []
     branch_deleted = False
     if cfg["merge"]["delete_branch"]:
@@ -523,7 +633,7 @@ def do_merge(cfg, args):
         "status": "merged_cleanup_failed" if failures else "merged",
         "action": "merge",
         "pr": args.pr,
-        "merge_sha": result.get("sha"),
+        "merge_sha": merge_sha,
         "method": cfg["merge"]["method"],
         "branch_deleted": branch_deleted,
         "worktree_cleanup": worktree_cleanup,

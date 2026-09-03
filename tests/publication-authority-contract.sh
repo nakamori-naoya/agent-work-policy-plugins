@@ -19,7 +19,7 @@ expect_json() {
   output=$("$@" 2>"$TMP/stderr")
   exit_code=$?
   if [ "$exit_code" -ne "$expected_exit" ]; then
-    ng "$* exits $exit_code, expected $expected_exit"
+    ng "$* exits $exit_code, expected $expected_exit: $output"
     return
   fi
   if jq -e --arg status "$expected_status" '.status == $status' <<<"$output" >/dev/null; then
@@ -57,7 +57,18 @@ if [ "${FAKE_GH_MODE:-failed}" = failed ]; then
   exit 1
 fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
-  printf '{"number":1,"isDraft":%s,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"%s","headRefOid":"fixture-sha","baseRefName":"%s","statusCheckRollup":[],"reviews":[],"url":"https://example.invalid/pr/1"}\n' "${FAKE_PR_DRAFT:-false}" "${FAKE_PR_HEAD:-agent/delegate}" "${FAKE_PR_BASE:-main}"
+  state=OPEN
+  merged_at=null
+  base_sha="${FAKE_PR_BASE_SHA:-fixture-base-sha}"
+  if [ "${FAKE_GH_MODE:-}" = fast-forward ] || [ "${FAKE_GH_MODE:-}" = fast-forward-unreflected ]; then
+    remote_base=$(git --git-dir "$FAKE_REMOTE" rev-parse "refs/heads/${FAKE_PR_BASE:-main}" 2>/dev/null || true)
+    if [ "${FAKE_GH_MODE:-}" = fast-forward ] && [ "$remote_base" = "${FAKE_PR_HEAD_SHA:-fixture-sha}" ]; then
+      state=MERGED
+      merged_at='"2026-09-03T00:00:00Z"'
+      base_sha="$remote_base"
+    fi
+  fi
+  printf '{"number":1,"state":"%s","mergedAt":%s,"isDraft":%s,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"%s","headRefOid":"%s","baseRefName":"%s","baseRefOid":"%s","statusCheckRollup":[],"reviews":[],"url":"https://example.invalid/pr/1"}\n' "$state" "$merged_at" "${FAKE_PR_DRAFT:-false}" "${FAKE_PR_HEAD:-agent/delegate}" "${FAKE_PR_HEAD_SHA:-fixture-sha}" "${FAKE_PR_BASE:-main}" "$base_sha"
 elif [ "$1" = pr ] && [ "$2" = ready ]; then
   printf '%s\n' 'https://example.invalid/pr/1'
 elif [ "$1" = repo ] && [ "$2" = view ]; then
@@ -201,6 +212,78 @@ echo "  But remote照会の通信・権限相当エラーはcleanup失敗のま�
 git -C "$TMP/merge-cleanup" remote set-url origin "$TMP/missing-remote.git"
 expect_json 3 merged_cleanup_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=merged python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_CLEANUP" --repo "$TMP/merge-cleanup" --pr 1
 rm -f "$CFG_CLEANUP"
+
+echo "  And fast-forwardは同一headと未進行baseだけを直接更新し、GitHub反映まで確認する"
+cp "$FIXTURE" "$TMP/repository/.harness-plugins/fast-forward.yml"
+yq -i '.permissions.merge = true' "$TMP/repository/.harness-plugins/fast-forward.yml"
+yq -i '.gates.before_merge = false' "$TMP/repository/.harness-plugins/fast-forward.yml"
+yq -i '.merge.method = "fast-forward"' "$TMP/repository/.harness-plugins/fast-forward.yml"
+yq -i '.merge.delete_branch = false' "$TMP/repository/.harness-plugins/fast-forward.yml"
+yq -i '.merge.readiness.min_approvals = 0' "$TMP/repository/.harness-plugins/fast-forward.yml"
+make_ff_repo() {
+  local name="$1"
+  FF_REPO="$TMP/$name"
+  FF_REMOTE="$TMP/$name.git"
+  git init -q --bare "$FF_REMOTE"
+  mkdir -p "$FF_REPO/.harness-plugins"
+  cp "$TMP/repository/.harness-plugins/fast-forward.yml" "$FF_REPO/.harness-plugins/agent-work-policy.config.yml"
+  git -C "$FF_REPO" init -q -b main
+  git -C "$FF_REPO" config user.email fixture@example.invalid
+  git -C "$FF_REPO" config user.name fixture
+  printf 'base\n' > "$FF_REPO/tracked"
+  git -C "$FF_REPO" add tracked
+  git -C "$FF_REPO" commit -qm initial
+  FF_BASE=$(git -C "$FF_REPO" rev-parse HEAD)
+  git -C "$FF_REPO" switch -qc agent/delegate
+  printf 'head\n' >> "$FF_REPO/tracked"
+  git -C "$FF_REPO" commit -qam head
+  FF_HEAD=$(git -C "$FF_REPO" rev-parse HEAD)
+  git -C "$FF_REPO" remote add origin "$FF_REMOTE"
+  git -C "$FF_REPO" push -q origin main agent/delegate
+  FF_CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$FF_REPO") || { ng "fast-forward config resolves"; return 1; }
+}
+
+make_ff_repo fast-forward-success || exit 1
+expect_json 0 merged env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_HEAD" ]; then ok "fast-forward updates base to head"; else ng "fast-forward base update"; fi
+rm -f "$FF_CFG"
+
+echo "  But base進行、head不一致、non-FF、push失敗、PR未反映はmerge失敗にする"
+make_ff_repo fast-forward-base-advanced || exit 1
+git -C "$FF_REPO" switch -q main
+printf 'advanced\n' >> "$FF_REPO/tracked"
+git -C "$FF_REPO" commit -qam advanced
+git -C "$FF_REPO" push -q origin main
+git -C "$FF_REPO" switch -q agent/delegate
+expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+rm -f "$FF_CFG"
+
+make_ff_repo fast-forward-head-mismatch || exit 1
+expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_BASE" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+rm -f "$FF_CFG"
+
+make_ff_repo fast-forward-non-ff || exit 1
+git -C "$FF_REPO" switch -q main
+printf 'diverged\n' >> "$FF_REPO/tracked"
+git -C "$FF_REPO" commit -qam diverged
+FF_ADVANCED=$(git -C "$FF_REPO" rev-parse HEAD)
+git -C "$FF_REPO" push -q origin main
+git -C "$FF_REPO" switch -q agent/delegate
+expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_ADVANCED" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+rm -f "$FF_CFG"
+
+make_ff_repo fast-forward-push-failure || exit 1
+cat > "$FF_REMOTE/hooks/pre-receive" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$FF_REMOTE/hooks/pre-receive"
+expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+rm -f "$FF_CFG"
+
+make_ff_repo fast-forward-unreflected || exit 1
+expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward-unreflected FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+rm -f "$FF_CFG"
 
 if [ "$FAIL" -eq 0 ]; then
   echo "Publication authority contract: passed"

@@ -42,7 +42,7 @@ gateが`true`なら対象状態を提示し、実際に承認を得た再実行�
 
 ## merge
 
-- `${.merge.method}`: GitHub merge APIへ渡す`squash` / `merge` / `rebase`。
+- `${.merge.method}`: `squash` / `merge` / `rebase`はGitHub merge APIへ渡す。`fast-forward`は検査済みhead SHAをbaseへ非force pushする。
 - `${.merge.delete_branch}`: merge成功後にremote作業branchを削除するか。worktree削除とは別である。
 - `${.merge.delete_worktree}`: merge成功後にcleanな副worktreeを削除するか。`workspace.use_worktree: true`のときだけ有効にできる。
 - `${.merge.readiness.min_approvals}`: readyに必要な最新reviewのApprove数。`0`も有効である。

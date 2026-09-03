@@ -43,7 +43,7 @@ verification:
 pull_request:
   draft: true
 merge:
-  method: squash               # squash | merge | rebase
+  method: squash               # squash | merge | rebase | fast-forward
   delete_branch: false
   delete_worktree: false       # trueならmerge後にcleanな副worktreeを削除
   readiness:
@@ -56,6 +56,10 @@ instructions:
 ```
 
 permissionは「してよいか」、gateは「直前に依頼者の承認が要るか」である。GitHub reviewのApproveは依頼者の承認ではなく、merge readinessの条件である。
+
+`fast-forward`はGitHubにmerge commitを作らせず、検査済みPR headをbaseへ非force pushする。
+local・PR・remoteのhead SHA、PR・remoteのbase SHA、祖先関係を照合し、push後にGitHub上のPRが
+indirect mergeとして反映されたことまで確認する。
 
 既定ではcommit・push・PR作成を許すが、各操作の直前に承認を求める。mergeは既定で禁止し、worktreeやbranchは自動削除しない。`delete_worktree: true`はworktree modeでだけ設定でき、PRのhead branchをcheckoutしたcleanな副worktreeだけを削除する。
 

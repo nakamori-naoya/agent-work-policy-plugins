@@ -15,7 +15,7 @@ jq -e '
     (.commands|type=="array" and length>0 and all(.[]; type=="string" and length>0))) and
   (.pull_request|type=="object" and (keys|sort)==["draft"] and (.draft|type=="boolean")) and
   (.merge|type=="object" and (keys|sort)==["delete_branch","delete_worktree","method","readiness"] and
-    (.method=="squash" or .method=="merge" or .method=="rebase") and
+    (.method=="squash" or .method=="merge" or .method=="rebase" or .method=="fast-forward") and
     (.delete_branch|type=="boolean") and
     (.delete_worktree|type=="boolean") and
     (.readiness|type=="object" and (keys|sort)==["min_approvals","require_checks_passed","require_no_unresolved_threads"] and
