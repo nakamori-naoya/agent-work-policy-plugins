@@ -59,6 +59,18 @@ if [ "${FAKE_GH_MODE:-failed}" = failed ]; then
   echo 'fixture gh failure' >&2
   exit 1
 fi
+if [ "$1" = pr ]; then
+  target_repo=''
+  previous=''
+  for arg in "$@"; do
+    if [ "$previous" = --repo ]; then target_repo=$arg; fi
+    previous=$arg
+  done
+  if [ "$target_repo" != "${FAKE_EXPECT_REPO:-fixture/repository}" ]; then
+    echo "fixture rejected unfixed PR repository: $target_repo" >&2
+    exit 1
+  fi
+fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
   state="${FAKE_PR_STATE:-OPEN}"
   draft="${FAKE_PR_DRAFT:-false}"
@@ -91,10 +103,11 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
   fi
   checks=${FAKE_CHECKS_JSON:-'[{"name":"gitleaks","conclusion":"SUCCESS","status":"COMPLETED"},{"name":"trufflehog","conclusion":"SUCCESS","status":"COMPLETED"}]'}
   head_sha="${FAKE_PR_HEAD_SHA:-fixture-sha}"
-  if [ "$view_count" -eq 2 ]; then
+  if [ "$view_count" -eq "${FAKE_CHANGE_VIEW:-2}" ]; then
     case "${FAKE_GH_MODE:-}" in
       second-view-closed) state=CLOSED ;;
       second-view-head-changed) head_sha="${FAKE_SECOND_HEAD_SHA:-changed-head-sha}" ;;
+      second-view-base-changed) base_sha="${FAKE_SECOND_BASE_SHA:-changed-base-sha}" ;;
       second-view-check-failed) checks='[{"name":"gitleaks","conclusion":"FAILURE","status":"COMPLETED"},{"name":"trufflehog","conclusion":"SUCCESS","status":"COMPLETED"}]' ;;
       second-view-draft) draft=true ;;
       second-view-unmergeable) mergeable=CONFLICTING ;;
@@ -104,6 +117,8 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
   fi
   printf '{"number":1,"state":"%s","mergedAt":%s,"isDraft":%s,"mergeable":"%s","mergeStateStatus":"%s","headRefName":"%s","headRefOid":"%s","headRepositoryOwner":{"login":"%s"},"headRepository":{"nameWithOwner":"%s"},"baseRefName":"%s","baseRefOid":"%s","statusCheckRollup":%s,"reviews":%s,"url":"https://example.invalid/pr/1"}\n' "$state" "$merged_at" "$draft" "$mergeable" "$merge_state" "${FAKE_PR_HEAD:-agent/delegate}" "$head_sha" "${FAKE_PR_HEAD_OWNER:-fixture}" "${FAKE_PR_HEAD_REPO:-fixture/repository}" "${FAKE_PR_BASE:-main}" "$base_sha" "$checks" "$reviews"
 elif [ "$1" = pr ] && [ "$2" = ready ]; then
+  printf '%s\n' 'https://example.invalid/pr/1'
+elif [ "$1" = pr ] && [ "$2" = create ]; then
   printf '%s\n' 'https://example.invalid/pr/1'
 elif [ "$1" = repo ] && [ "$2" = view ]; then
   remote_url=$(git remote get-url origin 2>/dev/null || true)
@@ -208,7 +223,8 @@ print(json.dumps({"repository_id":json.loads(repository.group(1)),"updates":item
   printf '%s\n' '{"data":{"updateRefs":{"clientMutationId":null}}}'
 elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]]; then
   unresolved=false
-  if [ "${FAKE_UNRESOLVED:-false}" = true ] || { [ "${FAKE_GH_MODE:-}" = second-view-thread ] && [ "$(cat "${FAKE_VIEW_COUNT:-/dev/null}" 2>/dev/null || printf '0')" -ge 2 ]; }; then unresolved=true; fi
+  change_before=$((${FAKE_CHANGE_VIEW:-2} - 1))
+  if [ "${FAKE_UNRESOLVED:-false}" = true ] || { [ "${FAKE_GH_MODE:-}" = second-view-thread ] && [ "$(cat "${FAKE_VIEW_COUNT:-/dev/null}" 2>/dev/null || printf '0')" -ge "$change_before" ]; }; then unresolved=true; fi
   if [ "$unresolved" = true ]; then nodes='[{"isResolved":false}]'; else nodes='[]'; fi
   printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":%s,"pageInfo":{"hasNextPage":false}}}}}}\n' "$nodes"
 elif [ "$1" = api ] && [[ " $* " == *' --method '* ]]; then
@@ -277,7 +293,7 @@ echo "  And ready-for-reviewはpull_request permissionと既存PR境界を再利
 : > "$TMP/gh.log"
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1 2>"$TMP/stderr")
 exit_code=$?
-if [ "$exit_code" -eq 0 ] && jq -e '.status == "ready" and .changed == true' <<<"$output" >/dev/null && rg -qx 'pr ready 1' "$TMP/gh.log"; then
+if [ "$exit_code" -eq 0 ] && jq -e '.status == "ready" and .changed == true' <<<"$output" >/dev/null && rg -qx 'pr ready 1 --repo fixture/repository' "$TMP/gh.log"; then
   ok "draft PR is made ready for review"
 else
   ng "draft PR ready-for-review contract"
@@ -294,6 +310,9 @@ expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLU
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 2
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_HEAD=agent/other python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_BASE=other python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
+: > "$TMP/gh.log"
+output=$(env PATH="$TMP/bin:$PATH" GH_REPO=attacker/other FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approved 2>"$TMP/stderr")
+if [ "$?" -eq 0 ] && jq -e '.status=="created"' <<<"$output" >/dev/null && rg -q '^pr create --repo fixture/repository ' "$TMP/gh.log"; then ok "GH_REPO cannot redirect PR creation"; else ng "PR creation was not pinned to nameWithOwner"; fi
 cp "$FIXTURE" "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
 yq -i '.permissions.pull_request = false' "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
 mkdir -p "$TMP/pull-request-disabled/.harness-plugins"
@@ -358,9 +377,10 @@ done
 git -C "$TMP/merge-enabled" remote set-url origin 'https://evil.invalid/path/github.com/fixture/repository.git'
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 2 ] && jq -e '.error=="GitHub対象とgit remoteが一致しない"' <<<"$output" >/dev/null; then ok "remote parser rejects github.com embedded in an evil host path"; else ng "remote parser accepted an evil host path"; fi
+fake_credential_uri=$(bash "$ROOT/tests/fixtures/fake-credential-uri.sh")
 for remote_url in \
   'https://github.com/fixture/repository.git?token=x' \
-  'https://user:password@github.com/fixture/repository.git' \
+  "$fake_credential_uri" \
   'https://github.com/extra/fixture/repository.git' \
   'ssh://git@github.com/fixture/repository.git#fragment' \
   'git@github.com:fixture/repository/extra.git'; do
@@ -453,7 +473,8 @@ else
 fi
 first_update_line=$(rg -n 'updateRefs' "$TMP/gh.log" | head -1 | cut -d: -f1)
 before_update=$((first_update_line - 1))
-if [ "$first_update_line" -gt 1 ] && sed -n "${before_update}p" "$TMP/gh.log" | rg -q 'reviewThreads'; then
+if [ "$first_update_line" -gt 1 ] && sed -n "${before_update}p" "$TMP/gh.log" | rg -q '^pr view .* --repo fixture/repository ';
+then
   ok "updateRefs immediately follows the final readiness network response"
 else
   ng "an extra network call remains between final readiness and updateRefs"
@@ -479,16 +500,40 @@ if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("protecti
 rm -f "$FF_CFG"
 
 echo "  And 2回目readinessのstate・head・check変化はmutation前に拒否する"
-for scenario in second-view-closed second-view-head-changed second-view-check-failed second-view-draft second-view-unmergeable second-view-unstable second-view-thread; do
+for scenario in second-view-closed second-view-head-changed second-view-base-changed second-view-check-failed second-view-draft second-view-unmergeable second-view-unstable second-view-thread; do
   make_ff_repo "$scenario" || exit 1
   : > "$TMP/view-count"
   : > "$TMP/gh.log"
-  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE="$scenario" FAKE_VIEW_COUNT="$TMP/view-count" FAKE_REMOTE="$FF_REMOTE" FAKE_SECOND_HEAD_SHA="$FF_MID" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
+  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE="$scenario" FAKE_VIEW_COUNT="$TMP/view-count" FAKE_REMOTE="$FF_REMOTE" FAKE_SECOND_HEAD_SHA="$FF_MID" FAKE_SECOND_BASE_SHA="$FF_MID" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
   exit_code=$?
-  if [ "$exit_code" -eq 3 ] && jq -e '.status=="merge_failed" and .reason=="readiness_changed"' <<<"$output" >/dev/null && ! rg -q 'updateRefs' "$TMP/gh.log" && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then
+  case "$scenario" in
+    second-view-closed) expected_reason=state:CLOSED ;;
+    second-view-head-changed) expected_reason=snapshot_head_changed ;;
+    second-view-base-changed) expected_reason=snapshot_base_changed ;;
+    second-view-check-failed) expected_reason=checks ;;
+    second-view-draft) expected_reason=draft ;;
+    second-view-unmergeable) expected_reason=mergeable:CONFLICTING ;;
+    second-view-unstable) expected_reason=merge_state:UNSTABLE ;;
+    second-view-thread) expected_reason=unresolved_threads ;;
+  esac
+  if [ "$exit_code" -eq 3 ] && jq -e --arg reason "$expected_reason" '.status=="not_ready" and (.reasons | index($reason))' <<<"$output" >/dev/null && ! rg -q 'updateRefs' "$TMP/gh.log" && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then
     ok "$scenario is rejected and both refs stay unchanged"
   else
     ng "$scenario was not rejected before mutation: $output"
+  fi
+  rm -f "$FF_CFG"
+done
+
+echo "  And merge直前の2回目readiness内で変化してもmutationしない"
+for scenario in second-view-closed second-view-head-changed second-view-check-failed second-view-thread; do
+  make_ff_repo "final-$scenario" || exit 1
+  : > "$TMP/view-count"
+  : > "$TMP/gh.log"
+  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE="$scenario" FAKE_CHANGE_VIEW=4 FAKE_VIEW_COUNT="$TMP/view-count" FAKE_REMOTE="$FF_REMOTE" FAKE_SECOND_HEAD_SHA="$FF_MID" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
+  if [ "$?" -eq 3 ] && jq -e '.status=="merge_failed" and .reason=="readiness_changed" and .latest.status=="not_ready"' <<<"$output" >/dev/null && ! rg -q 'updateRefs' "$TMP/gh.log" && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then
+    ok "final $scenario is rejected and both refs stay unchanged"
+  else
+    ng "final $scenario reached mutation: $output"
   fi
   rm -f "$FF_CFG"
 done
@@ -501,7 +546,7 @@ FF_CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$FF_REPO") || exit 1
 : > "$TMP/gh.log"
 approved_reviews='[{"author":{"login":"reviewer"},"submittedAt":"2026-09-03T00:00:00Z","state":"APPROVED"}]'
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=second-view-approval-lost FAKE_VIEW_COUNT="$TMP/view-count" FAKE_REMOTE="$FF_REMOTE" FAKE_PROTECTION_APPROVALS=1 FAKE_REVIEWS_JSON="$approved_reviews" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
-if [ "$?" -eq 3 ] && jq -e '.status=="merge_failed" and .reason=="readiness_changed" and (.latest.reasons | index("approvals"))' <<<"$output" >/dev/null && ! rg -q 'updateRefs' "$TMP/gh.log" && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then
+if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("approvals"))' <<<"$output" >/dev/null && ! rg -q 'updateRefs' "$TMP/gh.log" && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then
   ok "second-view approval loss is rejected and both refs stay unchanged"
 else
   ng "second-view approval loss was not rejected before mutation: $output"

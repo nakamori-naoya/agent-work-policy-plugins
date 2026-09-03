@@ -307,10 +307,10 @@ def gh_json(args, root, operation):
         emit({"error": "ghのJSONを読めない", "operation": operation, "detail": str(exc)}, 2)
 
 
-def pull_request_state(cfg, root, pr_number, branch=None):
+def pull_request_state(cfg, root, repo_name, pr_number, branch=None):
     view = gh_json(
         [
-            "pr", "view", str(pr_number), "--json",
+            "pr", "view", str(pr_number), "--repo", repo_name, "--json",
             "number,state,mergedAt,isDraft,mergeable,mergeStateStatus,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,statusCheckRollup,reviews,url",
         ],
         root,
@@ -551,15 +551,25 @@ query($owner:String!,$name:String!,$number:Int!){
 
 def merge_readiness(cfg, root, pr_number, info=None):
     info = info or repository_info(cfg, root)
-    state = pull_request_state(cfg, root, pr_number)
-    view = state["view"]
     expected_repo = info["nameWithOwner"]
+    initial_state = pull_request_state(cfg, root, expected_repo, pr_number)
+    initial_view = initial_state["view"]
+    required = cfg["merge"]["readiness"]
+    protection = branch_protection(root, expected_repo, initial_view.get("baseRefName"))
+    requirements = required_checks(protection) if required["require_checks_passed"] else []
+    check_runs = commit_check_runs(root, expected_repo, initial_view.get("headRefOid")) if any(item["kind"] == "check_run" for item in requirements) else []
+    unresolved = unresolved_threads(root, expected_repo, pr_number) if required["require_no_unresolved_threads"] else None
+    state = pull_request_state(cfg, root, expected_repo, pr_number)
+    view = state["view"]
     expected_owner = expected_repo.split("/", 1)[0]
     head_repository = view.get("headRepository") or {}
     head_owner = view.get("headRepositoryOwner") or {}
     reasons = []
     approvals = approval_count(view.get("reviews"))
-    required = cfg["merge"]["readiness"]
+    if initial_view.get("headRefOid") != view.get("headRefOid"):
+        reasons.append("snapshot_head_changed")
+    if initial_view.get("baseRefOid") != view.get("baseRefOid"):
+        reasons.append("snapshot_base_changed")
     if view.get("isDraft"):
         reasons.append("draft")
     if view.get("state") != "OPEN":
@@ -577,9 +587,6 @@ def merge_readiness(cfg, root, pr_number, info=None):
         reasons.append("cross_repository")
     if approvals < required["min_approvals"]:
         reasons.append("approvals")
-    protection = branch_protection(root, expected_repo, view.get("baseRefName"))
-    requirements = required_checks(protection) if required["require_checks_passed"] else []
-    check_runs = commit_check_runs(root, expected_repo, view.get("headRefOid")) if any(item["kind"] == "check_run" for item in requirements) else []
     passed = checks_passed(view.get("statusCheckRollup"), requirements, check_runs) if required["require_checks_passed"] else True
     if required["require_checks_passed"] and not passed:
         reasons.append("checks")
@@ -594,11 +601,8 @@ def merge_readiness(cfg, root, pr_number, info=None):
     admins_protected = bool((protection.get("enforce_admins") or {}).get("enabled"))
     if protect_fast_forward and not admins_protected:
         reasons.append("protection:admins")
-    unresolved = None
-    if required["require_no_unresolved_threads"]:
-        unresolved = unresolved_threads(root, expected_repo, pr_number)
-        if unresolved:
-            reasons.append("unresolved_threads")
+    if required["require_no_unresolved_threads"] and unresolved:
+        reasons.append("unresolved_threads")
     return {
         "status": "ready" if not reasons else "not_ready",
         "pr": pr_number,
@@ -653,9 +657,10 @@ def do_pull_request(cfg, args):
     permission(cfg, "pull_request")
     branch = safe_current_branch(cfg, root)
     gate(cfg, "pull_request", args.approved, {"branch": branch, "base": cfg["workspace"]["base_branch"], "title": args.title})
-    repository_info(cfg, root)
+    info = repository_info(cfg, root)
     cmd = [
-        "pr", "create", "--base", cfg["workspace"]["base_branch"], "--head", branch,
+        "pr", "create", "--repo", info["nameWithOwner"],
+        "--base", cfg["workspace"]["base_branch"], "--head", branch,
         "--title", args.title, "--body-file", args.body_file,
     ]
     if cfg["pull_request"]["draft"]:
@@ -670,9 +675,9 @@ def do_pull_request(cfg, args):
 def do_ready_for_review(cfg, args):
     root = bound_repo_root(cfg, args.repo)
     permission(cfg, "pull_request")
-    repository_info(cfg, root)
+    info = repository_info(cfg, root)
     branch = safe_current_branch(cfg, root)
-    state = pull_request_state(cfg, root, args.pr, branch)
+    state = pull_request_state(cfg, root, info["nameWithOwner"], args.pr, branch)
     view = state["view"]
     result = {
         "action": "pull_request",
@@ -690,7 +695,7 @@ def do_ready_for_review(cfg, args):
         emit({"status": "failed", **result, "reason": "base_branch_mismatch", "expected_base_branch": expected_base}, 3)
     if not view.get("isDraft"):
         emit({"status": "ready", **result, "changed": False})
-    proc = command(["gh", "pr", "ready", str(args.pr)], cwd=root)
+    proc = command(["gh", "pr", "ready", str(args.pr), "--repo", info["nameWithOwner"]], cwd=root)
     require_success(proc, "ready-for-review")
     emit({"status": "ready", **result, "changed": True})
 
@@ -803,7 +808,7 @@ def fast_forward_merge(cfg, root, ready, branch):
     reflected = {}
     reflected_ok = False
     for attempt in range(5):
-        reflected = pull_request_state(cfg, root, ready["pr"])["view"]
+        reflected = pull_request_state(cfg, root, info["nameWithOwner"], ready["pr"])["view"]
         reflected_ok = (
             updated_sha == head_sha
             and reflected.get("state") == "MERGED"
@@ -928,7 +933,7 @@ def do_cleanup(cfg, args):
     root = bound_repo_root(cfg, args.repo)
     permission(cfg, "merge")
     info = repository_info(cfg, root)
-    state = pull_request_state(cfg, root, args.pr)
+    state = pull_request_state(cfg, root, info["nameWithOwner"], args.pr)
     view = state["view"]
     expected_owner = info["nameWithOwner"].split("/", 1)[0]
     head_repository = view.get("headRepository") or {}

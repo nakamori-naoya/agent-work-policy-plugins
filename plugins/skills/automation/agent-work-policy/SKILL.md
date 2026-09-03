@@ -103,6 +103,8 @@ python3 "${PLUGIN_ROOT}/scripts/control.py" merge --config "$CFG_FILE" --repo "$
 
 required checkがGitHub Appへ固定されている場合、同名の別Appやlegacy StatusContextを成功へ読み替えない。readiness取得不能や100件を超えて完全取得できない場合も停止する。
 
+fast-forwardではprotection、checks、thread取得後にPRを最終再取得し、最初のsnapshotとのhead/base一致を含めて再評価する。公開対象はrepository identityから確定した`nameWithOwner`へ固定し、`GH_REPO`などで変更しない。
+
 ```bash
 python3 "${PLUGIN_ROOT}/scripts/control.py" cleanup --config "$CFG_FILE" --repo "$WORKTREE" --pr <number>
 ```

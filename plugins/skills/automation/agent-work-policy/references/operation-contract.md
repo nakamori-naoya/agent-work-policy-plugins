@@ -23,7 +23,7 @@ readiness未充足の間はmerge承認を求めない。GitHub reviewのApprove�
 
 このCAS設計は、複数refを単一mutationで原子的に更新し、各refへ更新前後のOIDを指定できるGitHub公式の[GraphQL `updateRefs`](https://docs.github.com/en/graphql/reference/git#updaterefs)契約に基づく。
 
-fast-forward直前の2回目readinessでは、PR state、draft、mergeable、merge state、head/base、review、required checkの名前とApp、review threadを再取得する。repository identityはそのreadinessより前に確定し、readinessの最後の応答から`updateRefs`まで追加のnetwork照会を挟まない。base/head SHAのraceは`beforeOid`で閉じる。required check、approval、conversation resolutionはpolicy要求以上のbranch protectionがserver側にも存在しadministratorへ適用されることを確認し、更新時のserver判定へ委ねる。ただし、別のrulesetやactor固有のbypass権限まではこのAPI応答から証明できない。PR state、draft、mergeable、merge stateには`updateRefs`の原子条件がないため、最後のreadiness応答後にも不可避のraceが残る。これらは窓を最小化しても完全には閉じられず、更新後のPR反映検査と`merge_partial`で検出する。
+fast-forward直前の2回目readinessでは、最初のPR snapshotを取得した後にbranch protection、required checkの名前とApp、review threadを取得し、最後にPRをもう一度取得する。最後のsnapshotでstate、draft、mergeable、merge state、head/base、review、check rollupを再評価し、最初のsnapshotからhead/baseが変わっていないことも要求する。repository identityはそのreadinessより前に確定し、すべての`gh pr`操作は確定した`nameWithOwner`を`--repo`へ渡すため、`GH_REPO`などの周辺状態では対象を変更できない。最後のPR応答から`updateRefs`まで追加のnetwork照会を挟まない。base/head SHAのraceは`beforeOid`で閉じる。required check、approval、conversation resolutionはpolicy要求以上のbranch protectionがserver側にも存在しadministratorへ適用されることを確認し、更新時のserver判定へ委ねる。ただし、別のrulesetやactor固有のbypass権限まではこのAPI応答から証明できない。PR state、draft、mergeable、merge stateには`updateRefs`の原子条件がないため、最後のreadiness応答後にも不可避のraceが残る。これらは窓を最小化しても完全には閉じられず、更新後のPR反映検査と`merge_partial`で検出する。
 
 GitHub repository identityとgit remoteのfallback照合は、GitHub API URLのhostと`nameWithOwner`へ一致する完全なrepository URLだけを許す。HTTPS、`ssh://git@host/owner/repo.git`、`git@host:owner/repo.git`を対象とし、余分なpath、query、fragment、credential、host内に見せかけた文字列を拒否する。API URL由来のhostを使うためGitHub Enterprise Serverにも同じ境界を適用する。
 
@@ -50,7 +50,7 @@ scriptが`waiting_for_human`を返した場合だけ、対象を提示して承�
 | `push` | `--repo` | permissionを判定し、branchとHEAD SHAを取得してからgateを判定する |
 | `pull-request` | `--repo`、`--title`、`--body-file` | permissionを判定し、branch、base、draftを決めてからgateを判定する |
 | `ready-for-review` | `--repo`、`--pr` | `pull_request` permissionを判定し、PR番号・現在branchとhead branch・設定baseとbase branchを照合する。draftなら`gh pr ready`を実行し、既にreadyなら外部変更しない |
-| `merge-readiness` | `--repo`、`--pr` | PRのApprove、checks、thread、base、headを再取得する |
+| `merge-readiness` | `--repo`、`--pr` | protection、checks、thread取得後にPRを最終再取得し、最初のsnapshotとのhead/base一致を含めて再評価する |
 | `merge` | `--repo`、`--pr` | permissionを判定し、readinessを再取得してからgateを判定し、設定されたmethodでmergeする |
 | `cleanup` | `--repo`、`--pr` | merge済みPRと同一repository headを確認し、CAS branch cleanupを再開する |
 

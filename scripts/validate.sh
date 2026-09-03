@@ -15,6 +15,7 @@ done
 bash "$ROOT/scripts/validate-marketplaces.sh" "$ROOT/.agents/plugins/marketplace.json" "$ROOT/.claude-plugin/marketplace.json" || failed=1
 while IFS='|' read -r name version rel; do
   jq -e --arg n "$name" --arg v "$version" '.name==$n and .version==$v' "$ROOT/$rel/.codex-plugin/plugin.json" "$ROOT/$rel/.claude-plugin/plugin.json" >/dev/null || failed=1
+  bash "$ROOT/scripts/validate-plugin-license.sh" "$ROOT/LICENSE" "$ROOT/$rel/LICENSE" || failed=1
 done < <(jq -r '.plugins[] | [.name,.version,(.source.path | ltrimstr("./"))] | join("|")' "$ROOT/.agents/plugins/marketplace.json")
 while IFS= read -r pb; do
   yq -o=json -I=0 '.' "$pb" | jq -e '.version==2 and all(.requires[]; type=="object" and ((keys|sort)==["marketplace","plugin","version"]))' >/dev/null || failed=1
@@ -28,5 +29,7 @@ while IFS= read -r script; do bash -n "$script" || failed=1; done < <(find "$ROO
 while IFS= read -r script; do PYTHONPYCACHEPREFIX="$TMP_ROOT/pycache" python3 -m py_compile "$script" || failed=1; done < <(find "$ROOT" -type f -name '*.py' | sort)
 bash "$ROOT/tests/publication-authority-contract.sh" || failed=1
 bash "$ROOT/tests/marketplace-contract.sh" || failed=1
+bash "$ROOT/tests/license-contract.sh" || failed=1
+bash "$ROOT/tests/secret-scanning-contract.sh" || failed=1
 if [ "$failed" -eq 0 ]; then echo 'Validation: passed'; else echo 'Validation: failed'; fi
 [ "$failed" -eq 0 ]
