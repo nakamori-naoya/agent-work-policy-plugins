@@ -123,8 +123,15 @@ elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]] && [[ " $* " == *'updateRef
         exit 1
       fi
       git --git-dir "$FAKE_REMOTE" update-ref "refs/heads/${FAKE_PR_BASE:-main}" "$FAKE_PR_HEAD_SHA" "$FAKE_PR_BASE_SHA"
+      if [ -n "${FAKE_REF_TRACE:-}" ]; then
+        printf '%s\n' 'merge:head-retained' >> "$FAKE_REF_TRACE"
+      fi
+    else
+      git --git-dir "$FAKE_REMOTE" update-ref -d "refs/heads/${FAKE_PR_HEAD:-agent/delegate}" "$FAKE_PR_HEAD_SHA"
+      if [ -n "${FAKE_REF_TRACE:-}" ]; then
+        printf '%s\n' 'cleanup:head-deleted' >> "$FAKE_REF_TRACE"
+      fi
     fi
-    git --git-dir "$FAKE_REMOTE" update-ref -d "refs/heads/${FAKE_PR_HEAD:-agent/delegate}" "$FAKE_PR_HEAD_SHA"
   fi
   printf '%s\n' '{"data":{"updateRefs":{"clientMutationId":null}}}'
 elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]]; then
@@ -328,8 +335,14 @@ make_ff_repo() {
 }
 
 make_ff_repo fast-forward-success || exit 1
-expect_json 0 merged env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+: > "$TMP/ref-trace"
+expect_json 0 merged env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_REF_TRACE="$TMP/ref-trace" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_HEAD" ]; then ok "fast-forward updates base to head"; else ng "fast-forward base update"; fi
+if [ "$(sed -n '1p' "$TMP/ref-trace")" = 'merge:head-retained' ] && [ "$(sed -n '2p' "$TMP/ref-trace")" = 'cleanup:head-deleted' ]; then
+  ok "head is retained for GitHub reflection and deleted only afterward"
+else
+  ng "head cleanup ran before GitHub merge reflection"
+fi
 rm -f "$FF_CFG"
 
 echo "  But base進行、head不一致、non-FF、push失敗、PR未反映はmerge失敗にする"
@@ -383,6 +396,11 @@ if [ "$partial_exit" -eq 4 ] && jq -e --arg sha "$FF_HEAD" '.status == "merge_pa
   ok "merge_partial returns actual updated base SHA (exit 4)"
 else
   ng "unreflected merge did not report partial state and actual base SHA: $partial_output"
+fi
+if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then
+  ok "reflection timeout retains the expected head for cleanup resume"
+else
+  ng "reflection timeout deleted the PR head"
 fi
 expect_json 0 cleaned env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_STATE=MERGED FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" cleanup --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 rm -f "$FF_CFG"

@@ -19,7 +19,7 @@ readiness未充足の間はmerge承認を求めない。GitHub reviewのApprove�
 - push: 現在の作業branchと設定remoteを使う。force pushとbase branch pushを提供しない。
 - pull-request: title、body file、作業branch、base branch、draft設定を使う。
 - ready-for-review: 内部レビュー完了後かつmerge readinessの前に必要なときだけ、既存PRの下書きを公開する。新しい公開先やmergeを生まないレビュー受付状態の遷移として、`pull_request` permissionだけを再利用し追加gateを持たない。既に公開済みなら外部変更なしで成功する。
-- merge: PR番号、head SHA、merge前のbase SHA、methodを使う。PRはOPENかつ同一repositoryのheadに限定し、更新直前にもchecksを含む状態を再取得する。`fast-forward`ではGitHub GraphQL `updateRefs`へbaseの`beforeOid=base SHA, afterOid=head SHA`とheadの`beforeOid=head SHA, afterOid=zero OID`を`force:false`で渡し、CAS更新とhead削除を原子的に行う。通常のpushやforce-with-leaseは使わない。更新後はremote baseとGitHub上のindirect merge反映を確認する。
+- merge: PR番号、head SHA、merge前のbase SHA、methodを使う。PRはOPENかつ同一repositoryのheadに限定し、更新直前にもchecksを含む状態を再取得する。`fast-forward`ではGitHub GraphQL `updateRefs`へbaseの`beforeOid=base SHA, afterOid=head SHA`とheadの`beforeOid=head SHA, afterOid=head SHA`（no-op CAS）を`force:false`で渡し、baseとheadの競合検査を原子的に行う。通常のpushやforce-with-leaseは使わない。更新後はremote baseとGitHub上のindirect merge反映を確認し、反映後だけ別のCAS mutationでheadを削除する。同一mutationでheadまで削除するとGitHubがPRを`MERGED`ではなく`CLOSED`にし得るため、反映確認前には削除しない。
 
 このCAS設計は、複数refを単一mutationで原子的に更新し、各refへ更新前後のOIDを指定できるGitHub公式の[GraphQL `updateRefs`](https://docs.github.com/en/graphql/reference/git#updaterefs)契約に基づく。
 

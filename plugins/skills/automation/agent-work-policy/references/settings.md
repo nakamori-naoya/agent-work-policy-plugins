@@ -42,7 +42,7 @@ gateが`true`なら対象状態を提示し、実際に承認を得た再実行�
 
 ## merge
 
-- `${.merge.method}`: `squash` / `merge` / `rebase`はGitHub merge APIへ渡す。`fast-forward`はGraphQL `updateRefs`の`beforeOid`と`force:false`でbaseとheadをatomicに更新する。`fast-forward`では`delete_branch: true`が必須。
+- `${.merge.method}`: `squash` / `merge` / `rebase`はGitHub merge APIへ渡す。`fast-forward`はGraphQL `updateRefs`の`beforeOid`と`force:false`でbase更新とhead no-op CASをatomicに行い、GitHubのmerge反映後にheadを別CASで削除する。`fast-forward`では`delete_branch: true`が必須。
 - `${.merge.delete_branch}`: merge成功後にremote作業branchを削除するか。worktree削除とは別である。
 - `${.merge.delete_worktree}`: merge成功後にcleanな副worktreeを削除するか。`workspace.use_worktree: true`のときだけ有効にできる。
 - `${.merge.readiness.min_approvals}`: readyに必要な最新reviewのApprove数。`0`も有効である。

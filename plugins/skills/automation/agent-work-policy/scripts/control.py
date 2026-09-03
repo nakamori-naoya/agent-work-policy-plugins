@@ -664,7 +664,7 @@ def fast_forward_merge(cfg, root, ready, branch):
         info["id"],
         [
             {"name": f"refs/heads/{base}", "before": base_sha, "after": head_sha},
-            {"name": f"refs/heads/{ready['head_branch']}", "before": head_sha, "after": ZERO_OID},
+            {"name": f"refs/heads/{ready['head_branch']}", "before": head_sha, "after": head_sha},
         ],
         "fast-forward-update-refs",
     )
