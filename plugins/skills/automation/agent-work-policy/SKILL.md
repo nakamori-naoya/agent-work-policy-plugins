@@ -105,6 +105,8 @@ required checkがGitHub Appへ固定されている場合、同名の別Appやle
 
 fast-forwardではprotection、checks、thread取得後にPRを最終再取得し、最初のsnapshotとのhead/base一致を含めて再評価する。公開対象はrepository identityから確定した`nameWithOwner`へ固定し、`GH_REPO`などで変更しない。
 
+pushとPR作成は実行時のrepository identity、単一push URL、local/remote head SHAを照合する。`merge_partial`はref更新の成否を否定できない状態なのでmergeを再実行しない。
+
 ```bash
 python3 "${PLUGIN_ROOT}/scripts/control.py" cleanup --config "$CFG_FILE" --repo "$WORKTREE" --pr <number>
 ```

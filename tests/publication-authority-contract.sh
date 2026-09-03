@@ -47,6 +47,7 @@ git -C "$TMP/repository" commit -qm initial
 git -C "$TMP/repository" switch -qc agent/delegate
 git init -q --bare "$TMP/repository-origin.git"
 git -C "$TMP/repository" remote add origin "$TMP/repository-origin.git"
+git -C "$TMP/repository" push -q origin main agent/delegate
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -81,7 +82,7 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
   if [ "$state" = MERGED ]; then
     merged_at='"2026-09-03T00:00:00Z"'
   fi
-  base_sha="${FAKE_PR_BASE_SHA:-fixture-base-sha}"
+  base_sha="${FAKE_PR_BASE_SHA:-$(git rev-parse main 2>/dev/null || printf 'fixture-base-sha')}"
   view_count=0
   if [ -n "${FAKE_VIEW_COUNT:-}" ]; then
     count=$(cat "$FAKE_VIEW_COUNT" 2>/dev/null || printf '0')
@@ -102,7 +103,11 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
     fi
   fi
   checks=${FAKE_CHECKS_JSON:-'[{"name":"gitleaks","conclusion":"SUCCESS","status":"COMPLETED"},{"name":"trufflehog","conclusion":"SUCCESS","status":"COMPLETED"}]'}
-  head_sha="${FAKE_PR_HEAD_SHA:-fixture-sha}"
+  head_sha="${FAKE_PR_HEAD_SHA:-$(git rev-parse HEAD 2>/dev/null || printf 'fixture-sha')}"
+  head_branch="${FAKE_PR_HEAD:-agent/delegate}"
+  base_branch="${FAKE_PR_BASE:-main}"
+  head_owner="${FAKE_PR_HEAD_OWNER:-fixture}"
+  head_repo="${FAKE_PR_HEAD_REPO:-fixture/repository}"
   if [ "$view_count" -eq "${FAKE_CHANGE_VIEW:-2}" ]; then
     case "${FAKE_GH_MODE:-}" in
       second-view-closed) state=CLOSED ;;
@@ -113,9 +118,12 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
       second-view-unmergeable) mergeable=CONFLICTING ;;
       second-view-unstable) merge_state=UNSTABLE ;;
       second-view-approval-lost) reviews='[]' ;;
+      second-view-head-retarget) head_branch=agent/retargeted ;;
+      second-view-base-retarget) base_branch=other ;;
+      second-view-repository-changed) head_owner=other; head_repo=other/repository ;;
     esac
   fi
-  printf '{"number":1,"state":"%s","mergedAt":%s,"isDraft":%s,"mergeable":"%s","mergeStateStatus":"%s","headRefName":"%s","headRefOid":"%s","headRepositoryOwner":{"login":"%s"},"headRepository":{"nameWithOwner":"%s"},"baseRefName":"%s","baseRefOid":"%s","statusCheckRollup":%s,"reviews":%s,"url":"https://example.invalid/pr/1"}\n' "$state" "$merged_at" "$draft" "$mergeable" "$merge_state" "${FAKE_PR_HEAD:-agent/delegate}" "$head_sha" "${FAKE_PR_HEAD_OWNER:-fixture}" "${FAKE_PR_HEAD_REPO:-fixture/repository}" "${FAKE_PR_BASE:-main}" "$base_sha" "$checks" "$reviews"
+  printf '{"number":1,"state":"%s","mergedAt":%s,"isDraft":%s,"mergeable":"%s","mergeStateStatus":"%s","headRefName":"%s","headRefOid":"%s","headRepositoryOwner":{"login":"%s"},"headRepository":{"nameWithOwner":"%s"},"baseRefName":"%s","baseRefOid":"%s","statusCheckRollup":%s,"reviews":%s,"url":"https://example.invalid/pr/1"}\n' "$state" "$merged_at" "$draft" "$mergeable" "$merge_state" "$head_branch" "$head_sha" "$head_owner" "$head_repo" "$base_branch" "$base_sha" "$checks" "$reviews"
 elif [ "$1" = pr ] && [ "$2" = ready ]; then
   printf '%s\n' 'https://example.invalid/pr/1'
 elif [ "$1" = pr ] && [ "$2" = create ]; then
@@ -149,7 +157,8 @@ elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]] && [[ " $* " == *'checkSuit
     fi
     suites='[{"app":{"databaseId":'"${FAKE_CHECK_APP_ID:-15368}"'},"checkRuns":{"nodes":[{"name":"gitleaks","status":"COMPLETED","conclusion":"'"$check_conclusion"'"},{"name":"trufflehog","status":"COMPLETED","conclusion":"SUCCESS"}],"pageInfo":{"hasNextPage":'"${FAKE_CHECK_RUNS_NEXT:-false}"'}}}]'
   fi
-  printf '{"data":{"repository":{"object":{"checkSuites":{"nodes":%s,"pageInfo":{"hasNextPage":%s}}}}}}\n' "$suites" "${FAKE_CHECK_SUITES_NEXT:-false}"
+  if [ "${FAKE_CHECK_DATA_ERRORS:-false}" = true ]; then errors=',"errors":[{"message":"fixture"}]'; else errors=''; fi
+  printf '{"data":{"repository":{"object":{"checkSuites":{"nodes":%s,"pageInfo":{"hasNextPage":%s}}}}}%s}\n' "$suites" "${FAKE_CHECK_SUITES_NEXT:-false}" "$errors"
 elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]] && [[ " $* " == *'updateRefs'* ]]; then
   if [ -n "${FAKE_REMOTE:-}" ] && [ -n "${FAKE_PR_HEAD_SHA:-}" ]; then
     query=''
@@ -219,6 +228,15 @@ print(json.dumps({"repository_id":json.loads(repository.group(1)),"updates":item
         printf '%s\n' 'cleanup:head-deleted' >> "$FAKE_REF_TRACE"
       fi
     fi
+    if [ "${FAKE_GH_MODE:-}" = update-refs-applied-error ]; then
+      printf '%s\n' '{"data":{"updateRefs":null},"errors":[{"message":"response lost after apply"}]}'
+      exit 0
+    fi
+    if [ "${FAKE_GH_MODE:-}" = update-refs-applied-lookup-failure ]; then
+      mv "$FAKE_REMOTE" "$FAKE_REMOTE.unavailable"
+      printf '%s\n' 'not-json'
+      exit 0
+    fi
   fi
   printf '%s\n' '{"data":{"updateRefs":{"clientMutationId":null}}}'
 elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]]; then
@@ -226,7 +244,8 @@ elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]]; then
   change_before=$((${FAKE_CHANGE_VIEW:-2} - 1))
   if [ "${FAKE_UNRESOLVED:-false}" = true ] || { [ "${FAKE_GH_MODE:-}" = second-view-thread ] && [ "$(cat "${FAKE_VIEW_COUNT:-/dev/null}" 2>/dev/null || printf '0')" -ge "$change_before" ]; }; then unresolved=true; fi
   if [ "$unresolved" = true ]; then nodes='[{"isResolved":false}]'; else nodes='[]'; fi
-  printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":%s,"pageInfo":{"hasNextPage":false}}}}}}\n' "$nodes"
+  if [ "${FAKE_THREAD_DATA_ERRORS:-false}" = true ]; then errors=',"errors":[{"message":"fixture"}]'; else errors=''; fi
+  printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":%s,"pageInfo":{"hasNextPage":false}}}}}%s}\n' "$nodes" "$errors"
 elif [ "$1" = api ] && [[ " $* " == *' --method '* ]]; then
   if [ "${FAKE_GH_MODE:-}" = merged ]; then
     if [ -n "${FAKE_REMOTE_DELETE_REF:-}" ]; then
@@ -279,15 +298,53 @@ if git -C "$TMP/repository" diff --quiet --cached; then
 else
   ng "unapproved delegation staged changes"
 fi
+printf 'outside\n' > "$TMP/repository/outside"
+git -C "$TMP/repository" add outside
+output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/paths.txt" --message fixture --approved 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.reason=="pre_staged_paths_outside_scope" and (.paths | index("outside"))' <<<"$output" >/dev/null; then ok "pre-staged path outside scope is rejected"; else ng "pre-staged outside path was committed"; fi
+git -C "$TMP/repository" reset -q outside
+printf ':(glob)**\n' > "$TMP/magic-paths.txt"
+before_index=$(git -C "$TMP/repository" write-tree)
+output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/magic-paths.txt" --message fixture --approved 2>"$TMP/stderr")
+if [ "$?" -eq 2 ] && jq -e '.error=="repository外または.gitはcommit対象にできない"' <<<"$output" >/dev/null && [ "$(git -C "$TMP/repository" write-tree)" = "$before_index" ]; then ok "Git pathspec magic is rejected without changing index"; else ng "pathspec magic changed index"; fi
+printf './tracked\n' > "$TMP/dot-paths.txt"
+before_index=$(git -C "$TMP/repository" write-tree)
+output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/dot-paths.txt" --message fixture --approved 2>"$TMP/stderr")
+if [ "$?" -eq 2 ] && jq -e '.error=="repository外または.gitはcommit対象にできない"' <<<"$output" >/dev/null && [ "$(git -C "$TMP/repository" write-tree)" = "$before_index" ]; then ok "dot-relative path is rejected without changing index"; else ng "dot-relative path changed index"; fi
 
 echo "  And pushとPR作成はgate待ちの後、実行失敗をJSONで返す"
-expect_json 3 waiting_for_human python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository"
+expect_json 3 waiting_for_human env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository"
+git -C "$TMP/repository" remote set-url --add --push origin "$TMP/repository-origin.git"
+git -C "$TMP/repository" remote set-url --add --push origin "$TMP/repository-origin.git"
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved 2>"$TMP/stderr")
+if [ "$?" -eq 2 ] && jq -e '.error=="GitHub対象とgit remoteが一致しない"' <<<"$output" >/dev/null; then ok "multiple push URLs are rejected"; else ng "multiple push URLs were accepted"; fi
+git -C "$TMP/repository" config --unset-all remote.origin.pushurl
 git -C "$TMP/repository" remote set-url origin "$TMP/missing-push.git"
 expect_json 3 failed python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
 git -C "$TMP/repository" remote set-url origin "$TMP/repository-origin.git"
+git -C "$TMP/repository" commit -q --allow-empty -m additional
+local_sha=$(git -C "$TMP/repository" rev-parse HEAD)
+expect_json 0 pushed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
+expect_json 0 pushed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
+if [ "$(git --git-dir "$TMP/repository-origin.git" rev-parse refs/heads/agent/delegate)" = "$local_sha" ]; then ok "push sends the fixed local SHA and is idempotent"; else ng "push did not send the inspected SHA"; fi
+git clone -q "$TMP/repository-origin.git" "$TMP/remote-writer"
+git -C "$TMP/remote-writer" config user.email fixture@example.invalid
+git -C "$TMP/remote-writer" config user.name fixture
+git -C "$TMP/remote-writer" switch -q agent/delegate
+git -C "$TMP/remote-writer" commit -q --allow-empty -m ahead
+git -C "$TMP/remote-writer" push -q origin HEAD:agent/delegate
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
+git -C "$TMP/remote-writer" switch -q -C divergent origin/main
+git -C "$TMP/remote-writer" commit -q --allow-empty -m divergent
+git -C "$TMP/remote-writer" push -q --force origin HEAD:agent/delegate
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
+git --git-dir "$TMP/repository-origin.git" update-ref refs/heads/agent/delegate "$local_sha"
 printf 'fixture body\n' > "$TMP/body.md"
-expect_json 3 waiting_for_human python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md"
+expect_json 3 waiting_for_human env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md"
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approved
+git -C "$TMP/repository" commit -q --allow-empty -m unpublished
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approved
+git -C "$TMP/repository" reset -q --soft HEAD^
 
 echo "  And ready-for-reviewはpull_request permissionと既存PR境界を再利用して冪等に公開する"
 : > "$TMP/gh.log"
@@ -298,6 +355,7 @@ if [ "$exit_code" -eq 0 ] && jq -e '.status == "ready" and .changed == true' <<<
 else
   ng "draft PR ready-for-review contract"
 fi
+if tail -2 "$TMP/gh.log" | sed -n '1p' | rg -q '^pr view ' && tail -1 "$TMP/gh.log" | rg -q '^pr ready '; then ok "ready mutation immediately follows the final PR snapshot"; else ng "ready has a network read after the final PR snapshot"; fi
 : > "$TMP/gh.log"
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_PR_DRAFT=false python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1 2>"$TMP/stderr")
 exit_code=$?
@@ -310,6 +368,8 @@ expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLU
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 2
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_HEAD=agent/other python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_BASE=other python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_STATE=CLOSED python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_HEAD_OWNER=other FAKE_PR_HEAD_REPO=other/repository python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
 : > "$TMP/gh.log"
 output=$(env PATH="$TMP/bin:$PATH" GH_REPO=attacker/other FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approved 2>"$TMP/stderr")
 if [ "$?" -eq 0 ] && jq -e '.status=="created"' <<<"$output" >/dev/null && rg -q '^pr create --repo fixture/repository ' "$TMP/gh.log"; then ok "GH_REPO cannot redirect PR creation"; else ng "PR creation was not pinned to nameWithOwner"; fi
@@ -345,6 +405,7 @@ git -C "$TMP/merge-enabled" add tracked
 git -C "$TMP/merge-enabled" commit -qm initial
 git -C "$TMP/merge-enabled" switch -qc agent/delegate
 git -C "$TMP/merge-enabled" remote add origin "$TMP/repository-origin.git"
+git -C "$TMP/merge-enabled" push -q --force origin main agent/delegate
 CFG_MERGE=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/merge-enabled") || { ng "merge-enabled config resolves"; exit 1; }
 expect_json 3 waiting_for_human env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 --approved
@@ -366,6 +427,10 @@ output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_APP_ID=999 pyth
 if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false and (.reasons | index("checks"))' <<<"$output" >/dev/null; then ok "required check rejects a different GitHub App"; else ng "required check accepted a different GitHub App"; fi
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_RUNS_EMPTY=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false' <<<"$output" >/dev/null; then ok "empty app check runs fail closed"; else ng "empty app check runs fail open"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_DATA_ERRORS=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 2 ] && jq -e '.error=="GitHub APIがerrorを返した"' <<<"$output" >/dev/null; then ok "check data with GraphQL errors fails closed"; else ng "check GraphQL errors were accepted"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_THREAD_DATA_ERRORS=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 2 ] && jq -e '.error=="GitHub APIがerrorを返した"' <<<"$output" >/dev/null; then ok "thread data with GraphQL errors fails closed"; else ng "thread GraphQL errors were accepted"; fi
 for pagination in FAKE_CHECK_SUITES_NEXT FAKE_CHECK_RUNS_NEXT; do
   output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready "$pagination"=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
   if [ "$?" -eq 2 ] && jq -e '.error | contains("完全に取得できない")' <<<"$output" >/dev/null; then ok "$pagination fails closed"; else ng "$pagination did not fail closed"; fi
@@ -378,22 +443,29 @@ git -C "$TMP/merge-enabled" remote set-url origin 'https://evil.invalid/path/git
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 2 ] && jq -e '.error=="GitHub対象とgit remoteが一致しない"' <<<"$output" >/dev/null; then ok "remote parser rejects github.com embedded in an evil host path"; else ng "remote parser accepted an evil host path"; fi
 fake_credential_uri=$(bash "$ROOT/tests/fixtures/fake-credential-uri.sh")
+secret_query_url=$(printf '%s%s' 'https://github.com/fixture/repository.git?token=' 'fixture-secret-query')
+secret_fragment_url=$(printf '%s%s' 'ssh://git@github.com/fixture/repository.git#' 'fixture-secret-fragment')
+sanitized=$(python3 -c 'import importlib.util,json,sys
+spec=importlib.util.spec_from_file_location("control",sys.argv[1]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+print(json.dumps([module.redacted_remote_url(value) for value in sys.argv[2:]]))' "$PLUGIN/scripts/control.py" "$fake_credential_uri" "$secret_query_url" "$secret_fragment_url" 'root@github.com:fixture/repository.git')
+if jq -e 'all(.[]; .=="<redacted-invalid-remote-url>")' <<<"$sanitized" >/dev/null && [[ "$sanitized" != *fixture-password* ]] && [[ "$sanitized" != *fixture-secret-query* ]] && [[ "$sanitized" != *fixture-secret-fragment* ]]; then ok "remote URL sanitizer never returns invalid secrets"; else ng "remote URL sanitizer exposed invalid input"; fi
 for remote_url in \
   'https://github.com/fixture/repository.git?token=x' \
   "$fake_credential_uri" \
   'https://github.com/extra/fixture/repository.git' \
   'ssh://git@github.com/fixture/repository.git#fragment' \
+  'ssh://git@github.com:443/fixture/repository.git' \
   'git@github.com:fixture/repository/extra.git'; do
   git -C "$TMP/merge-enabled" remote set-url origin "$remote_url"
   output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true FAKE_REPO_SSH_URL='git@github.com:unused/unused.git' python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
-  if [ "$?" -eq 2 ] && jq -e '.error=="GitHub対象とgit remoteが一致しない"' <<<"$output" >/dev/null; then ok "remote parser rejects $remote_url"; else ng "remote parser accepted $remote_url"; fi
+  if [ "$?" -eq 2 ] && jq -e '.error=="GitHub対象とgit remoteが一致しない"' <<<"$output" >/dev/null && [[ "$output" != *fixture-password* ]]; then ok "remote parser rejects and redacts invalid URL"; else ng "remote parser accepted or exposed invalid URL"; fi
 done
 for remote_url in 'ssh://git@github.com/fixture/repository.git' 'git@github.com:fixture/repository.git'; do
   git -C "$TMP/merge-enabled" remote set-url origin "$remote_url"
-  expect_json 0 ready env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true FAKE_REPO_SSH_URL='git@github.com:unused/unused.git' python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
+  expect_json 0 ready env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true FAKE_REPO_SSH_URL='git@github.com:unused/unused.git' python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
 done
 git -C "$TMP/merge-enabled" remote set-url origin 'ssh://git@ghe.example.com/fixture/repository.git'
-expect_json 0 ready env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true FAKE_REPO_SSH_URL='git@ghe.example.com:unused/unused.git' FAKE_WEB_URL='https://ghe.example.com/fixture/repository' python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
+expect_json 0 ready env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true FAKE_REPO_SSH_URL='git@ghe.example.com:unused/unused.git' FAKE_WEB_URL='https://ghe.example.com/fixture/repository' python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
 git -C "$TMP/merge-enabled" remote set-url origin "$TMP/repository-origin.git"
 rm -f "$CFG_MERGE"
 
@@ -479,6 +551,7 @@ then
 else
   ng "an extra network call remains between final readiness and updateRefs"
 fi
+if [ "$(rg -c '^repo view ' "$TMP/gh.log")" -eq 1 ]; then ok "merge fixes repository identity once"; else ng "merge re-resolved repository identity"; fi
 rm -f "$FF_CFG"
 
 echo "  And fast-forwardはpolicy要求以上のserver branch protectionを必須にする"
@@ -500,7 +573,7 @@ if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("protecti
 rm -f "$FF_CFG"
 
 echo "  And 2回目readinessのstate・head・check変化はmutation前に拒否する"
-for scenario in second-view-closed second-view-head-changed second-view-base-changed second-view-check-failed second-view-draft second-view-unmergeable second-view-unstable second-view-thread; do
+for scenario in second-view-closed second-view-head-changed second-view-base-changed second-view-head-retarget second-view-base-retarget second-view-repository-changed second-view-check-failed second-view-draft second-view-unmergeable second-view-unstable second-view-thread; do
   make_ff_repo "$scenario" || exit 1
   : > "$TMP/view-count"
   : > "$TMP/gh.log"
@@ -510,6 +583,9 @@ for scenario in second-view-closed second-view-head-changed second-view-base-cha
     second-view-closed) expected_reason=state:CLOSED ;;
     second-view-head-changed) expected_reason=snapshot_head_changed ;;
     second-view-base-changed) expected_reason=snapshot_base_changed ;;
+    second-view-head-retarget) expected_reason=snapshot_head_branch_changed ;;
+    second-view-base-retarget) expected_reason=snapshot_base_branch_changed ;;
+    second-view-repository-changed) expected_reason=snapshot_head_repository_changed ;;
     second-view-check-failed) expected_reason=checks ;;
     second-view-draft) expected_reason=draft ;;
     second-view-unmergeable) expected_reason=mergeable:CONFLICTING ;;
@@ -525,7 +601,7 @@ for scenario in second-view-closed second-view-head-changed second-view-base-cha
 done
 
 echo "  And merge直前の2回目readiness内で変化してもmutationしない"
-for scenario in second-view-closed second-view-head-changed second-view-check-failed second-view-thread; do
+for scenario in second-view-closed second-view-head-changed second-view-base-changed second-view-head-retarget second-view-base-retarget second-view-repository-changed second-view-check-failed second-view-draft second-view-thread; do
   make_ff_repo "final-$scenario" || exit 1
   : > "$TMP/view-count"
   : > "$TMP/gh.log"
@@ -545,8 +621,8 @@ FF_CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$FF_REPO") || exit 1
 : > "$TMP/view-count"
 : > "$TMP/gh.log"
 approved_reviews='[{"author":{"login":"reviewer"},"submittedAt":"2026-09-03T00:00:00Z","state":"APPROVED"}]'
-output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=second-view-approval-lost FAKE_VIEW_COUNT="$TMP/view-count" FAKE_REMOTE="$FF_REMOTE" FAKE_PROTECTION_APPROVALS=1 FAKE_REVIEWS_JSON="$approved_reviews" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
-if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("approvals"))' <<<"$output" >/dev/null && ! rg -q 'updateRefs' "$TMP/gh.log" && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=second-view-approval-lost FAKE_CHANGE_VIEW=4 FAKE_VIEW_COUNT="$TMP/view-count" FAKE_REMOTE="$FF_REMOTE" FAKE_PROTECTION_APPROVALS=1 FAKE_REVIEWS_JSON="$approved_reviews" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.status=="merge_failed" and .reason=="readiness_changed" and (.latest.reasons | index("approvals"))' <<<"$output" >/dev/null && ! rg -q 'updateRefs' "$TMP/gh.log" && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then
   ok "second-view approval loss is rejected and both refs stay unchanged"
 else
   ng "second-view approval loss was not rejected before mutation: $output"
@@ -627,6 +703,15 @@ rm -f "$FF_CFG"
 
 make_ff_repo update-refs-data-and-error || exit 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=update-refs-data-and-error FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+rm -f "$FF_CFG"
+
+make_ff_repo update-refs-applied-error || exit 1
+expect_json 4 merge_partial env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=update-refs-applied-error FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_HEAD" ]; then ok "applied mutation with error is partial"; else ng "applied error fixture did not update base"; fi
+rm -f "$FF_CFG"
+
+make_ff_repo update-refs-applied-lookup-failure || exit 1
+expect_json 4 merge_partial env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=update-refs-applied-lookup-failure FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 rm -f "$FF_CFG"
 
 make_ff_repo cleanup-head-mismatch || exit 1

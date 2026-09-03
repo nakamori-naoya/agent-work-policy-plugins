@@ -267,7 +267,7 @@ def safe_paths(root, paths_file):
     root_path = Path(root).resolve()
     for item in paths:
         candidate = Path(item)
-        if candidate.is_absolute() or ".." in candidate.parts or item == ".git" or item.startswith(".git/"):
+        if candidate.is_absolute() or item.startswith((":", "./")) or ".." in candidate.parts or item == ".git" or item.startswith(".git/"):
             emit({"error": "repository外または.gitはcommit対象にできない", "path": item}, 2)
         resolved = (root_path / candidate).resolve()
         try:
@@ -302,9 +302,12 @@ def gh_json(args, root, operation):
     proc = command(["gh", *args], cwd=root)
     output = require_success(proc, operation)
     try:
-        return json.loads(output)
+        data = json.loads(output)
     except json.JSONDecodeError as exc:
         emit({"error": "ghのJSONを読めない", "operation": operation, "detail": str(exc)}, 2)
+    if isinstance(data, dict) and data.get("errors"):
+        emit({"error": "GitHub APIがerrorを返した", "operation": operation}, 2)
+    return data
 
 
 def pull_request_state(cfg, root, repo_name, pr_number, branch=None):
@@ -324,48 +327,86 @@ def pull_request_state(cfg, root, repo_name, pr_number, branch=None):
     }
 
 
-def repository_name(root):
-    data = gh_json(["repo", "view", "--json", "nameWithOwner"], root, "repository-name")
-    return data["nameWithOwner"]
+def redacted_remote_url(remote_url):
+    scp = re.fullmatch(r"git@([^/:?#]+):([^/:?#]+)/([^/:?#]+?)(?:\.git)?", remote_url)
+    if scp:
+        return f"git@{scp.group(1)}:{scp.group(2)}/{scp.group(3)}.git"
+    try:
+        parsed = urlparse(remote_url)
+        allowed_user = parsed.scheme == "ssh" and parsed.username == "git" and parsed.password is None
+        no_credentials = parsed.username is None and parsed.password is None
+        clean = (
+            parsed.scheme in {"https", "ssh"}
+            and (no_credentials or allowed_user)
+            and parsed.hostname
+            and parsed.port is None
+            and not parsed.query
+            and not parsed.fragment
+            and not parsed.params
+            and unquote(parsed.path) == parsed.path
+        )
+        parts = parsed.path.removeprefix("/").split("/") if clean else []
+        if len(parts) != 2 or not all(parts):
+            return "<redacted-invalid-remote-url>"
+        user = "git@" if allowed_user else ""
+        return f"{parsed.scheme}://{user}{parsed.hostname}/{parts[0]}/{parts[1]}"
+    except (TypeError, ValueError):
+        return "<redacted-invalid-remote-url>"
 
 
-def repository_info(cfg, root):
-    data = gh_json(["repo", "view", "--json", "id,nameWithOwner,sshUrl,url"], root, "repository-identity")
-    remote_url = require_success(git(root, "remote", "get-url", cfg["git"]["remote"]), "remote-url", 2)
+def remote_matches_repository(remote_url, data):
     candidates = {data.get("sshUrl"), data.get("url"), f"{data.get('url')}.git"}
-    if remote_url not in candidates:
-        web = urlparse(str(data.get("url") or ""))
-        expected_host = web.hostname
-        remote_host = None
-        remote_name = None
-        scp = re.fullmatch(r"git@([^/:?#]+):([^/:?#]+)/([^/:?#]+?)(?:\.git)?", remote_url)
-        if scp:
-            remote_host = scp.group(1)
-            remote_name = f"{scp.group(2)}/{scp.group(3)}"
-        else:
+    if remote_url in candidates:
+        return True
+    web = urlparse(str(data.get("url") or ""))
+    expected_host = web.hostname
+    remote_host = None
+    remote_name = None
+    scp = re.fullmatch(r"git@([^/:?#]+):([^/:?#]+)/([^/:?#]+?)(?:\.git)?", remote_url)
+    if scp:
+        remote_host = scp.group(1)
+        remote_name = f"{scp.group(2)}/{scp.group(3)}"
+    else:
+        try:
             parsed = urlparse(remote_url)
             allowed_user = parsed.scheme == "ssh" and parsed.username == "git" and parsed.password is None
             no_credentials = parsed.username is None and parsed.password is None
             clean = (
                 parsed.scheme in {"https", "ssh"}
                 and (no_credentials or allowed_user)
+                and parsed.port is None
                 and not parsed.query
                 and not parsed.fragment
                 and not parsed.params
                 and unquote(parsed.path) == parsed.path
             )
-            parts = parsed.path.removeprefix("/").split("/") if clean else []
-            if len(parts) == 2 and all(parts):
-                remote_host = parsed.hostname
-                repository = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
-                remote_name = f"{parts[0]}/{repository}"
-        if remote_host != expected_host or remote_name != data.get("nameWithOwner"):
-            emit({
-                "error": "GitHub対象とgit remoteが一致しない",
-                "github_repository": data.get("nameWithOwner"),
-                "remote": cfg["git"]["remote"],
-                "remote_url": remote_url,
-            }, 2)
+        except ValueError:
+            clean = False
+            parsed = None
+        parts = parsed.path.removeprefix("/").split("/") if clean else []
+        if len(parts) == 2 and all(parts):
+            remote_host = parsed.hostname
+            repository = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
+            remote_name = f"{parts[0]}/{repository}"
+    return remote_host == expected_host and remote_name == data.get("nameWithOwner")
+
+
+def repository_info(cfg, root):
+    data = gh_json(["repo", "view", "--json", "id,nameWithOwner,sshUrl,url"], root, "repository-identity")
+    remote = cfg["git"]["remote"]
+    fetch_url = require_success(git(root, "remote", "get-url", remote), "remote-url", 2)
+    push_proc = git(root, "remote", "get-url", "--push", "--all", remote)
+    push_urls = require_success(push_proc, "remote-push-urls", 2).splitlines()
+    inspected = [fetch_url, *push_urls]
+    if len(push_urls) != 1 or any(not remote_matches_repository(item, data) for item in inspected):
+        emit({
+            "error": "GitHub対象とgit remoteが一致しない",
+            "github_repository": data.get("nameWithOwner"),
+            "remote": remote,
+            "remote_urls": ["<redacted-invalid-remote-url>" for _ in inspected],
+        }, 2)
+    data["remote"] = remote
+    data["pushUrl"] = push_urls[0]
     return data
 
 
@@ -566,10 +607,20 @@ def merge_readiness(cfg, root, pr_number, info=None):
     head_owner = view.get("headRepositoryOwner") or {}
     reasons = []
     approvals = approval_count(view.get("reviews"))
-    if initial_view.get("headRefOid") != view.get("headRefOid"):
-        reasons.append("snapshot_head_changed")
-    if initial_view.get("baseRefOid") != view.get("baseRefOid"):
-        reasons.append("snapshot_base_changed")
+    snapshot_fields = {
+        "headRefName": "snapshot_head_branch_changed",
+        "headRefOid": "snapshot_head_changed",
+        "baseRefName": "snapshot_base_branch_changed",
+        "baseRefOid": "snapshot_base_changed",
+        "headRepositoryOwner": "snapshot_head_repository_changed",
+        "headRepository": "snapshot_head_repository_changed",
+    }
+    for field, reason in snapshot_fields.items():
+        if initial_view.get(field) != view.get(field):
+            if reason not in reasons:
+                reasons.append(reason)
+    if initial_view.get("baseRefName") != cfg["workspace"]["base_branch"]:
+        reasons.append("initial_base_branch_mismatch")
     if view.get("isDraft"):
         reasons.append("draft")
     if view.get("state") != "OPEN":
@@ -628,13 +679,30 @@ def do_commit(cfg, args):
     permission(cfg, "commit")
     branch = safe_current_branch(cfg, root)
     paths = safe_paths(root, args.paths_file)
-    changes = git(root, "status", "--porcelain", "--", *paths)
+    staged = require_success(git(root, "diff", "--cached", "--name-only", "-z"), "inspect-staged-paths", 2)
+    staged_paths = [item for item in staged.split("\0") if item]
+    allowed = tuple(path.rstrip("/") for path in paths)
+    outside = [
+        item for item in staged_paths
+        if not any(item == path or item.startswith(f"{path}/") for path in allowed)
+    ]
+    if outside:
+        emit({"status": "failed", "action": "commit", "reason": "pre_staged_paths_outside_scope", "paths": outside}, 3)
+    changes = git(root, "--literal-pathspecs", "status", "--porcelain", "--", *paths)
     require_success(changes, "inspect-commit-paths", 2)
     if not changes.stdout.strip():
         emit({"status": "no_changes", "action": "commit", "paths": paths}, 3)
     verification = run_verification(cfg, root)
     gate(cfg, "commit", args.approved, {"branch": branch, "paths": paths, "verification": verification})
-    require_success(git(root, "add", "--", *paths), "stage")
+    require_success(git(root, "--literal-pathspecs", "add", "--", *paths), "stage")
+    staged = require_success(git(root, "diff", "--cached", "--name-only", "-z"), "inspect-staged-paths", 2)
+    staged_paths = [item for item in staged.split("\0") if item]
+    outside = [
+        item for item in staged_paths
+        if not any(item == path or item.startswith(f"{path}/") for path in allowed)
+    ]
+    if outside:
+        emit({"status": "failed", "action": "commit", "reason": "staged_paths_outside_scope", "paths": outside}, 3)
     if git(root, "diff", "--cached", "--quiet").returncode == 0:
         emit({"status": "no_staged_changes", "action": "commit"}, 3)
     require_success(git(root, "commit", "-m", args.message), "commit")
@@ -645,19 +713,51 @@ def do_commit(cfg, args):
 def do_push(cfg, args):
     root = bound_repo_root(cfg, args.repo)
     permission(cfg, "push")
+    info = repository_info(cfg, root)
     branch = safe_current_branch(cfg, root)
     sha = require_success(git(root, "rev-parse", "HEAD"), "head-sha", 2)
-    gate(cfg, "push", args.approved, {"branch": branch, "sha": sha, "remote": cfg["git"]["remote"]})
-    require_success(git(root, "push", "-u", cfg["git"]["remote"], branch), "push")
-    emit({"status": "pushed", "action": "push", "branch": branch, "sha": sha, "remote": cfg["git"]["remote"]})
+    remote_ref = f"refs/heads/{branch}"
+    probe = git(root, "ls-remote", "--heads", info["pushUrl"], remote_ref)
+    if probe.returncode:
+        emit({"status": "failed", "action": "push", "reason": "remote_ref_lookup_failed"}, 3)
+    remote_sha = next((line.partition("\t")[0] for line in probe.stdout.splitlines()), None)
+    if remote_sha not in {None, sha}:
+        ancestor = git(root, "merge-base", "--is-ancestor", remote_sha, sha)
+        if ancestor.returncode != 0:
+            reason = "remote_branch_mismatch" if ancestor.returncode == 1 else "remote_ancestry_unknown"
+            emit({"status": "failed", "action": "push", "reason": reason, "remote_sha": remote_sha, "local_sha": sha}, 3)
+    context = {
+        "repository": info["nameWithOwner"],
+        "url": redacted_remote_url(info["pushUrl"]),
+        "branch": branch,
+        "sha": sha,
+    }
+    gate(cfg, "push", args.approved, context)
+    require_success(git(root, "push", info["pushUrl"], f"{sha}:{remote_ref}"), "push")
+    emit({"status": "pushed", "action": "push", **context, "remote": info["remote"]})
 
 
 def do_pull_request(cfg, args):
     root = bound_repo_root(cfg, args.repo)
     permission(cfg, "pull_request")
-    branch = safe_current_branch(cfg, root)
-    gate(cfg, "pull_request", args.approved, {"branch": branch, "base": cfg["workspace"]["base_branch"], "title": args.title})
     info = repository_info(cfg, root)
+    branch = safe_current_branch(cfg, root)
+    sha = require_success(git(root, "rev-parse", "HEAD"), "head-sha", 2)
+    remote_ref = f"refs/heads/{branch}"
+    probe = git(root, "ls-remote", "--heads", info["pushUrl"], remote_ref)
+    if probe.returncode:
+        emit({"status": "failed", "action": "pull_request", "reason": "remote_ref_lookup_failed"}, 3)
+    remote_sha = next((line.partition("\t")[0] for line in probe.stdout.splitlines()), None)
+    if remote_sha != sha:
+        emit({"status": "failed", "action": "pull_request", "reason": "remote_head_mismatch", "remote_sha": remote_sha, "local_sha": sha}, 3)
+    gate(cfg, "pull_request", args.approved, {
+        "repository": info["nameWithOwner"],
+        "url": redacted_remote_url(info["pushUrl"]),
+        "branch": branch,
+        "sha": sha,
+        "base": cfg["workspace"]["base_branch"],
+        "title": args.title,
+    })
     cmd = [
         "pr", "create", "--repo", info["nameWithOwner"],
         "--base", cfg["workspace"]["base_branch"], "--head", branch,
@@ -677,6 +777,14 @@ def do_ready_for_review(cfg, args):
     permission(cfg, "pull_request")
     info = repository_info(cfg, root)
     branch = safe_current_branch(cfg, root)
+    local_head = require_success(git(root, "rev-parse", "HEAD"), "head-sha", 2)
+    remote_ref = f"refs/heads/{branch}"
+    probe = git(root, "ls-remote", "--heads", info["pushUrl"], remote_ref)
+    if probe.returncode:
+        emit({"status": "failed", "action": "pull_request", "pr": args.pr, "reason": "remote_ref_lookup_failed"}, 3)
+    remote_head = next((line.partition("\t")[0] for line in probe.stdout.splitlines()), None)
+    if remote_head != local_head:
+        emit({"status": "failed", "action": "pull_request", "pr": args.pr, "reason": "remote_head_mismatch"}, 3)
     state = pull_request_state(cfg, root, info["nameWithOwner"], args.pr, branch)
     view = state["view"]
     result = {
@@ -693,6 +801,15 @@ def do_ready_for_review(cfg, args):
     expected_base = cfg["workspace"]["base_branch"]
     if not state["base_branch_matches"]:
         emit({"status": "failed", **result, "reason": "base_branch_mismatch", "expected_base_branch": expected_base}, 3)
+    expected_owner = info["nameWithOwner"].split("/", 1)[0]
+    head_repository = view.get("headRepository") or {}
+    head_owner = view.get("headRepositoryOwner") or {}
+    if head_repository.get("nameWithOwner") != info["nameWithOwner"] or head_owner.get("login") != expected_owner:
+        emit({"status": "failed", **result, "reason": "cross_repository"}, 3)
+    if view.get("state") != "OPEN":
+        emit({"status": "failed", **result, "reason": f"state:{view.get('state')}"}, 3)
+    if view.get("headRefOid") != local_head:
+        emit({"status": "failed", **result, "reason": "local_head_mismatch"}, 3)
     if not view.get("isDraft"):
         emit({"status": "ready", **result, "changed": False})
     proc = command(["gh", "pr", "ready", str(args.pr), "--repo", info["nameWithOwner"]], cwd=root)
@@ -700,8 +817,43 @@ def do_ready_for_review(cfg, args):
     emit({"status": "ready", **result, "changed": True})
 
 
-def fast_forward_merge(cfg, root, ready, branch):
-    remote = cfg["git"]["remote"]
+def probe_remote_refs(root, push_url, refs):
+    proc = git(root, "ls-remote", "--heads", push_url, *refs)
+    if proc.returncode:
+        return None
+    found = {ref: None for ref in refs}
+    for line in proc.stdout.splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref in found:
+            found[ref] = sha
+    return found
+
+
+def emit_uncertain_ref_update(root, info, ready, detail):
+    base_ref = f"refs/heads/{ready['base_branch']}"
+    head_ref = f"refs/heads/{ready['head_branch']}"
+    observed = probe_remote_refs(root, info["pushUrl"], [base_ref, head_ref])
+    if observed is not None and observed[base_ref] == ready["base_sha"] and observed[head_ref] == ready["head_sha"]:
+        emit({
+            "status": "merge_failed",
+            "action": "merge",
+            "reason": "atomic_ref_update_failed_unchanged",
+            "detail": detail,
+        }, 3)
+    emit({
+        "status": "merge_partial",
+        "action": "merge",
+        "reason": "atomic_ref_update_outcome_uncertain",
+        "base_updated": observed is not None and observed[base_ref] == ready["head_sha"],
+        "merge_sha": ready["head_sha"],
+        "remote_base_sha": None if observed is None else observed[base_ref],
+        "remote_head_sha": None if observed is None else observed[head_ref],
+        "detail": detail,
+    }, 4)
+
+
+def fast_forward_merge(cfg, root, info, ready, branch):
+    remote_url = info["pushUrl"]
     base = ready["base_branch"]
     head_sha = ready["head_sha"]
     base_sha = ready["base_sha"]
@@ -720,18 +872,14 @@ def fast_forward_merge(cfg, root, ready, branch):
         f"refs/heads/{ready['head_branch']}": None,
         f"refs/heads/{base}": None,
     }
-    probe = git(root, "ls-remote", "--heads", remote, *refs)
-    if probe.returncode:
+    observed = probe_remote_refs(root, remote_url, list(refs))
+    if observed is None:
         emit({
             "status": "merge_failed",
             "action": "merge",
             "reason": "remote_ref_lookup_failed",
-            "stderr": probe.stderr[-4000:].strip(),
         }, 3)
-    for line in probe.stdout.splitlines():
-        sha, _, ref = line.partition("\t")
-        if ref in refs:
-            refs[ref] = sha
+    refs.update(observed)
     remote_head = refs[f"refs/heads/{ready['head_branch']}"]
     remote_base = refs[f"refs/heads/{base}"]
     if remote_head != head_sha:
@@ -766,7 +914,6 @@ def fast_forward_merge(cfg, root, ready, branch):
             "reason": "ancestry_check_failed",
             "stderr": ancestor.stderr[-4000:].strip(),
         }, 3)
-    info = repository_info(cfg, root)
     latest = merge_readiness(cfg, root, ready["pr"], info)
     if (
         latest["status"] != "ready"
@@ -790,20 +937,10 @@ def fast_forward_merge(cfg, root, ready, branch):
         "fast-forward-update-refs",
     )
     if not updated["ok"]:
-        emit({
-            "status": "merge_failed",
-            "action": "merge",
-            "reason": "atomic_ref_update_failed",
-            "detail": updated,
-        }, 3)
-    remote_after = git(root, "ls-remote", "--heads", remote, f"refs/heads/{base}")
+        emit_uncertain_ref_update(root, info, ready, updated)
+    remote_after = git(root, "ls-remote", "--heads", remote_url, f"refs/heads/{base}")
     if remote_after.returncode:
-        emit({
-            "status": "merge_failed",
-            "action": "merge",
-            "reason": "remote_verification_failed",
-            "stderr": remote_after.stderr[-4000:].strip(),
-        }, 3)
+        emit_uncertain_ref_update(root, info, ready, {"operation": "remote-verification"})
     updated_sha = next((line.partition("\t")[0] for line in remote_after.stdout.splitlines()), None)
     reflected = {}
     reflected_ok = False
@@ -836,9 +973,9 @@ def fast_forward_merge(cfg, root, ready, branch):
     return head_sha
 
 
-def cleanup_remote_branch(cfg, root, head_branch, head_sha):
+def cleanup_remote_branch(cfg, root, info, head_branch, head_sha):
     validate_branch(cfg, root, head_branch)
-    remote = cfg["git"]["remote"]
+    remote = info["pushUrl"]
     remote_ref = f"refs/heads/{head_branch}"
     probe = git(root, "ls-remote", "--exit-code", "--heads", remote, remote_ref)
     if probe.returncode == 2:
@@ -854,7 +991,6 @@ def cleanup_remote_branch(cfg, root, head_branch, head_sha):
             "remote_head_sha": remote_head,
             "pr_head_sha": head_sha,
         }
-    info = repository_info(cfg, root)
     deleted = atomic_update_refs(
         root,
         info["id"],
@@ -869,17 +1005,17 @@ def cleanup_remote_branch(cfg, root, head_branch, head_sha):
     return {"ok": False, "operation": "delete_branch", "detail": deleted}
 
 
-def cleanup_after_merge(cfg, root, head_branch, head_sha):
+def cleanup_after_merge(cfg, root, info, head_branch, head_sha):
     failures = []
     branch_deleted = False
     branch_cleanup = {"ok": True, "branch_deleted": False, "reason": "disabled"}
     if cfg["merge"]["delete_branch"]:
-        branch_cleanup = cleanup_remote_branch(cfg, root, head_branch, head_sha)
+        branch_cleanup = cleanup_remote_branch(cfg, root, info, head_branch, head_sha)
         branch_deleted = branch_cleanup.get("branch_deleted", False)
         if not branch_cleanup["ok"]:
             failures.append(branch_cleanup)
     worktree_cleanup = {"deleted": False, "reason": "disabled", "worktree": root}
-    if cfg["merge"]["delete_worktree"]:
+    if cfg["merge"]["delete_worktree"] and not failures:
         validate_branch(cfg, root, head_branch)
         worktree_cleanup = remove_merged_worktree(root, head_branch)
         if not worktree_cleanup["deleted"]:
@@ -890,18 +1026,18 @@ def cleanup_after_merge(cfg, root, head_branch, head_sha):
 def do_merge(cfg, args):
     root = bound_repo_root(cfg, args.repo)
     permission(cfg, "merge")
+    info = repository_info(cfg, root)
     branch = safe_current_branch(cfg, root)
-    ready = merge_readiness(cfg, root, args.pr)
+    ready = merge_readiness(cfg, root, args.pr, info)
     if ready["status"] != "ready":
         emit(ready, 3)
     gate(cfg, "merge", args.approved, ready)
     if cfg["merge"]["method"] == "fast-forward":
-        merge_sha = fast_forward_merge(cfg, root, ready, branch)
+        merge_sha = fast_forward_merge(cfg, root, info, ready, branch)
     else:
-        repo_name = repository_name(root)
         result = gh_json(
             [
-                "api", "--method", "PUT", f"repos/{repo_name}/pulls/{args.pr}/merge",
+                "api", "--method", "PUT", f"repos/{info['nameWithOwner']}/pulls/{args.pr}/merge",
                 "-f", f"merge_method={cfg['merge']['method']}", "-f", f"sha={ready['head_sha']}",
             ],
             root,
@@ -911,7 +1047,7 @@ def do_merge(cfg, args):
             emit({"status": "merge_failed", "action": "merge", "result": result}, 3)
         merge_sha = result.get("sha")
     failures, branch_deleted, branch_cleanup, worktree_cleanup = cleanup_after_merge(
-        cfg, root, ready["head_branch"], ready["head_sha"]
+        cfg, root, info, ready["head_branch"], ready["head_sha"]
     )
     payload = {
         "status": "merged_cleanup_failed" if failures else "merged",
@@ -947,7 +1083,7 @@ def do_cleanup(cfg, args):
     ):
         emit({"status": "cleanup_failed", "action": "cleanup", "reason": "unsafe_pull_request_state"}, 3)
     failures, branch_deleted, branch_cleanup, worktree_cleanup = cleanup_after_merge(
-        cfg, root, view["headRefName"], view["headRefOid"]
+        cfg, root, info, view["headRefName"], view["headRefOid"]
     )
     payload = {
         "status": "cleanup_failed" if failures else "cleaned",

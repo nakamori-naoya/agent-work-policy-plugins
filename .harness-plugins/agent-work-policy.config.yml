@@ -23,7 +23,7 @@ gates:
   before_pull_request: false
   before_merge: false
 verification:
-  commands: ["git diff --check"]
+  commands: ["git diff --check", "bash scripts/validate.sh"]
 pull_request:
   draft: false
 merge:

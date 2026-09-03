@@ -15,9 +15,9 @@ readiness未充足の間はmerge承認を求めない。GitHub reviewのApprove�
 
 ## 操作ごとの入力
 
-- commit: 明示したpath、message、検証結果を使う。path外をstageしない。
-- push: 現在の作業branchと設定remoteを使う。force pushとbase branch pushを提供しない。
-- pull-request: title、body file、作業branch、base branch、draft設定を使う。
+- commit: 明示したpath、message、検証結果を使う。事前stageを含めpath外がindexにあれば停止し、明示pathだけをcommitする。
+- push: 実行時にGitHub repository identityとfetch/push URLを照合し、単一の検査済みpush URLへ固定HEAD SHAを完全な作業branch refspecで送る。remote branchは不存在、同一SHA、またはlocal HEADの祖先だけを許し、進行済み・分岐・祖先判定不能なら停止する。通常のnon-force pushなので、検査後にremoteが進行した場合も上流を上書きしない。検査済みURLを直接使い`-u`を付けないため、local branchのupstream trackingは変更しない。force pushとbase branch pushを提供しない。
+- pull-request: title、body file、作業branch、base branch、draft設定を使う。remote headがlocal HEADと一致してから、固定repositoryへ作成する。
 - ready-for-review: 内部レビュー完了後かつmerge readinessの前に必要なときだけ、既存PRの下書きを公開する。新しい公開先やmergeを生まないレビュー受付状態の遷移として、`pull_request` permissionだけを再利用し追加gateを持たない。既に公開済みなら外部変更なしで成功する。
 - merge: PR番号、head SHA、merge前のbase SHA、methodを使う。PRはOPENかつ同一repositoryのheadに限定し、更新直前にもchecksを含む状態を再取得する。`fast-forward`ではGitHub GraphQL `updateRefs`へbaseの`beforeOid=base SHA, afterOid=head SHA`とheadの`beforeOid=head SHA, afterOid=head SHA`（no-op CAS）を`force:false`で渡し、baseとheadの競合検査を原子的に行う。通常のpushやforce-with-leaseは使わない。更新後はremote baseとGitHub上のindirect merge反映を確認し、反映後だけ別のCAS mutationでheadを削除する。同一mutationでheadまで削除するとGitHubがPRを`MERGED`ではなく`CLOSED`にし得るため、反映確認前には削除しない。
 
@@ -25,11 +25,14 @@ readiness未充足の間はmerge承認を求めない。GitHub reviewのApprove�
 
 fast-forward直前の2回目readinessでは、最初のPR snapshotを取得した後にbranch protection、required checkの名前とApp、review threadを取得し、最後にPRをもう一度取得する。最後のsnapshotでstate、draft、mergeable、merge state、head/base、review、check rollupを再評価し、最初のsnapshotからhead/baseが変わっていないことも要求する。repository identityはそのreadinessより前に確定し、すべての`gh pr`操作は確定した`nameWithOwner`を`--repo`へ渡すため、`GH_REPO`などの周辺状態では対象を変更できない。最後のPR応答から`updateRefs`まで追加のnetwork照会を挟まない。base/head SHAのraceは`beforeOid`で閉じる。required check、approval、conversation resolutionはpolicy要求以上のbranch protectionがserver側にも存在しadministratorへ適用されることを確認し、更新時のserver判定へ委ねる。ただし、別のrulesetやactor固有のbypass権限まではこのAPI応答から証明できない。PR state、draft、mergeable、merge stateには`updateRefs`の原子条件がないため、最後のreadiness応答後にも不可避のraceが残る。これらは窓を最小化しても完全には閉じられず、更新後のPR反映検査と`merge_partial`で検出する。
 
-GitHub repository identityとgit remoteのfallback照合は、GitHub API URLのhostと`nameWithOwner`へ一致する完全なrepository URLだけを許す。HTTPS、`ssh://git@host/owner/repo.git`、`git@host:owner/repo.git`を対象とし、余分なpath、query、fragment、credential、host内に見せかけた文字列を拒否する。API URL由来のhostを使うためGitHub Enterprise Serverにも同じ境界を適用する。
+GitHub repository identityとgit remoteのfallback照合は、GitHub API URLのhostと`nameWithOwner`へ一致する完全なrepository URLだけを許す。HTTPS、`ssh://git@host/owner/repo.git`、`git@host:owner/repo.git`を対象とし、余分なpath、明示port、query、fragment、credential、不正なSCP username、host内に見せかけた文字列を拒否する。不正URLの原文はerrorへ含めず固定文へredactする。API URL由来のhostを使うためGitHub Enterprise Serverにも同じ境界を適用する。
 
 remote branchの削除は冪等である。merge時点ですでに対象refが存在しなければ削除済みとして成功する。
 remote refの照会自体が通信・認証・権限などで失敗した場合は、削除済みと推測せずcleanup失敗を返す。
 削除対象が存在する場合はremote headがPR head SHAと一致するときだけ、`updateRefs`の`beforeOid`付き削除を行う。partial success後は`cleanup --pr`で同じCAS cleanupだけを再開できる。
+branch cleanupに失敗した場合は、cleanup再開に必要な作業場所を保持するためworktreeを削除しない。
+
+GraphQLを含むGitHub JSON応答はtop-level `errors`が1件でもあれば失敗とする。`updateRefs`の通信・応答異常時はremote base/headを照合し、両refが更新前のままと確認できた場合だけ`merge_failed`、base更新または照合不能なら再実行を促さない`merge_partial`を返す。
 
 scriptが`waiting_for_human`を返した場合だけ、対象を提示して承認を求める。承認を得ていない呼出しへ
 `--approved`を付けない。`forbidden`、`not_ready`、`verification_failed`を成功として扱わない。
