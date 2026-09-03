@@ -19,7 +19,7 @@ readiness未充足の間はmerge承認を求めない。GitHub reviewのApprove�
 - push: 現在の作業branchと設定remoteを使う。force pushとbase branch pushを提供しない。
 - pull-request: title、body file、作業branch、base branch、draft設定を使う。
 - ready-for-review: 内部レビュー完了後かつmerge readinessの前に必要なときだけ、既存PRの下書きを公開する。新しい公開先やmergeを生まないレビュー受付状態の遷移として、`pull_request` permissionだけを再利用し追加gateを持たない。既に公開済みなら外部変更なしで成功する。
-- merge: PR番号、head SHA、base SHA、methodを使う。ready判定後も操作直前に状態を再取得し、成功後は設定に従ってremote branchと副worktreeを片付ける。`fast-forward`ではlocal・PR・remoteのhead、PR・remoteのbase、祖先関係を照合し、head SHAをbaseへforceなしでpushする。push後はremote baseとGitHub上のindirect merge反映を確認する。
+- merge: PR番号、head SHA、merge前のbase SHA、methodを使う。ready判定後も操作直前に状態を再取得し、成功後は設定に従ってremote branchと副worktreeを片付ける。`fast-forward`ではlocal・PR・remoteのhead、PR・remoteのbase、祖先関係を照合し、head SHAをbaseへforceなしでpushする。push後はremote baseがhead SHAになったことと、GitHub上のPRが同じhead SHA・merge前base SHAでindirect mergeとして反映されたことを確認する。
 
 remote branchの削除は冪等である。merge時点ですでに対象refが存在しなければ削除済みとして成功する。
 remote refの照会自体が通信・認証・権限などで失敗した場合は、削除済みと推測せずcleanup失敗を返す。

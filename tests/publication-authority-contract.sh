@@ -65,7 +65,6 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
     if [ "${FAKE_GH_MODE:-}" = fast-forward ] && [ "$remote_base" = "${FAKE_PR_HEAD_SHA:-fixture-sha}" ]; then
       state=MERGED
       merged_at='"2026-09-03T00:00:00Z"'
-      base_sha="$remote_base"
     fi
   fi
   printf '{"number":1,"state":"%s","mergedAt":%s,"isDraft":%s,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"%s","headRefOid":"%s","baseRefName":"%s","baseRefOid":"%s","statusCheckRollup":[],"reviews":[],"url":"https://example.invalid/pr/1"}\n' "$state" "$merged_at" "${FAKE_PR_DRAFT:-false}" "${FAKE_PR_HEAD:-agent/delegate}" "${FAKE_PR_HEAD_SHA:-fixture-sha}" "${FAKE_PR_BASE:-main}" "$base_sha"

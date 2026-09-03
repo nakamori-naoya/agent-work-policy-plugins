@@ -572,7 +572,7 @@ def fast_forward_merge(cfg, root, ready, branch):
             and reflected.get("state") == "MERGED"
             and bool(reflected.get("mergedAt"))
             and reflected.get("headRefOid") == head_sha
-            and reflected.get("baseRefOid") == head_sha
+            and reflected.get("baseRefOid") == base_sha
         )
         if reflected_ok:
             break
