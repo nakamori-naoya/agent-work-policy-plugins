@@ -78,8 +78,8 @@
 
 | Variant | 中心要素 | 現在の例 | 意図的な例外 |
 |---|---|---|---|
-| 単一 skill | Root `SKILL.md` と薄い `skills/<name>/SKILL.md` | `grill`、`content-types` | 設定・reference・assetは必要な場合だけ |
-| 複数 skill playbook | `playbook.yml` と複数の `skills/*/SKILL.md` | `digest` | Root `SKILL.md` が無い場合がある |
+| 単一 skill | 公開manifestが指す一意な `SKILL.md` | `grill`、`content-types` | 設定・reference・assetは必要な場合だけ |
+| 複数 skill playbook | `playbook.yml` と複数の `skills/*/SKILL.md` | `digest` | 各公開skillの正本は1つだけにする |
 | Script-only | Manifest の `Scripts` capability と `scripts/` | `doc-render` | Root / nested `SKILL.md` が無い |
 
 ## ③ 層と依存の向き

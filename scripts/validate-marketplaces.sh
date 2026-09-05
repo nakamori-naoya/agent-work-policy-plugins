@@ -33,7 +33,7 @@ while IFS='|' read -r source name version; do
   done
   IFS=$old_ifs
   [ -d "$plugin_root" ] && [ ! -L "$plugin_root" ] || exit 1
-  [ -f "$plugin_root/SKILL.md" ] && [ ! -L "$plugin_root/SKILL.md" ] || exit 1
+  [ -f "$plugin_root/skills/work-with-policy/SKILL.md" ] && [ ! -L "$plugin_root/skills/work-with-policy/SKILL.md" ] || exit 1
   case "$plugin_root" in "$marketplace_root"/plugins/skills/*) ;; *) exit 1 ;; esac
   jq -e --arg name "$name" --arg version "$version" '
     .name == $name and .version == $version and
