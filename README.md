@@ -2,6 +2,36 @@
 
 repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを解決するClaude Code/Codex両対応marketplaceである。
 
+## こんなときに使う
+
+**AIエージェントへGit作業を任せながら、変更の公開範囲と人間の確認地点をrepositoryごとに固定したいときに使う。** worktree、branch、検証、commit、push、PR、mergeを一つの設定に従って進める。
+
+- mainへの直接変更を避け、必ず専用branchまたはworktreeで作業させたい
+- commit、push、PR、mergeのうち、許可する操作だけを明示したい
+- merge直前など、特定の地点だけ人間の承認を必須にしたい
+- repository固有の検証commandが成功した変更だけをcommitさせたい
+- PRの承認、required check、未解決threadを確認してからmergeしたい
+
+このpluginはGitHubのアクセス権限を設定しない。第三者の直pushや無断mergeを防ぐ設定は、GitHub Ruleset、CODEOWNERS、repository権限で行う。このpluginは、AIエージェント自身の作業手順と停止条件を制御する。
+
+## 利用の流れ
+
+1. repositoryへ完全なpolicy設定を置く。
+2. エージェントが`plan`で作業可能か確認する。
+3. 設定に従ってbranchまたはworktreeを開始する。
+4. 指定commandで検証し、許可された公開操作だけを進める。
+5. human gateがある場合だけ利用者へ承認を求める。
+
+たとえば、次のように依頼できる。
+
+```text
+このIssueをrepositoryのwork policyに従って実装し、PR作成まで進めて。
+```
+
+```text
+検証とmerge readinessを確認し、policyが許す場合だけPRをmergeして。
+```
+
 ## インストール
 
 ### Codex
