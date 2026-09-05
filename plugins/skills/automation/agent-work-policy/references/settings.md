@@ -49,6 +49,8 @@ gateが`true`なら対象状態を提示し、実際に承認を得た再実行�
 - `${.merge.readiness.require_checks_passed}`: `true`ならbase branch protectionのrequired checkを取得し、1件以上ある全checkの存在と成功をready条件にする。`checks[].app_id`が正の値ならhead commitのCheckRun名とGitHub App database IDの両方を照合する。`null`または`-1`は任意Appの同名CheckRunを許すが、legacy StatusContextでは満たせない。`checks`がなく`contexts`だけなら名前で照合する。取得不能・0件・欠落・100件超で完全取得できない場合はfail-closed。
 - `${.merge.readiness.require_no_unresolved_threads}`: `true`なら未解決review threadが0件であることをready条件にする。
 
+`${.merge.readiness.min_approvals}`が`0`で、GitHubが`mergeStateStatus=BLOCKED`を返した場合、実行器は対象branchへ実際に適用されるRulesetを取得する。全ルールがPRルールであり、選択したmerge methodが許可され、review thread必須をpolicyでも検査し、現在利用者が全RulesetをPR経由でbypassできるとGitHubが返した場合だけ、承認不足による`BLOCKED`を許容する。required checkと未解決threadの失敗はbypassしない。
+
 `fast-forward`ではbranch protectionのrequired approvalsが`${.merge.readiness.min_approvals}`以上であり、conversation resolutionが要求時にserver側でも必須で、administratorにも保護が適用されることを確認する。policy判定より弱いserver protectionでは更新しない。
 
 設定値を報告用に列挙するだけで終わらせない。各値はworkspace作成、公開操作、停止、PR、mergeの該当箇所へ反映する。

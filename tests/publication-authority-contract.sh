@@ -147,6 +147,14 @@ elif [ "$1" = api ] && [[ "${2:-}" == *'/protection' ]]; then
     status_checks='{"contexts":["gitleaks","trufflehog"],"checks":[{"context":"gitleaks","app_id":'"${FAKE_REQUIRED_APP_ID:-15368}"'},{"context":"trufflehog","app_id":'"${FAKE_REQUIRED_APP_ID:-15368}"'}]}'
   fi
   printf '{"required_status_checks":%s,"required_pull_request_reviews":{"required_approving_review_count":%s},"required_conversation_resolution":{"enabled":%s},"enforce_admins":{"enabled":%s}}\n' "$status_checks" "${FAKE_PROTECTION_APPROVALS:-0}" "${FAKE_PROTECTION_CONVERSATIONS:-true}" "${FAKE_PROTECTION_ADMINS:-true}"
+elif [ "$1" = api ] && [[ "${2:-}" == *'/rules/branches/'* ]]; then
+  if [ -n "${FAKE_RULESET_BYPASS:-}" ]; then
+    printf '%s\n' '[{"type":"pull_request","parameters":{"required_approving_review_count":1,"require_code_owner_review":true,"required_review_thread_resolution":true,"allowed_merge_methods":["squash","merge","rebase"]},"ruleset_id":9001}]'
+  else
+    printf '%s\n' '[]'
+  fi
+elif [ "$1" = api ] && [[ "${2:-}" == *'/rulesets/9001' ]]; then
+  printf '{"id":9001,"enforcement":"active","current_user_can_bypass":"%s"}\n' "${FAKE_RULESET_BYPASS:-never}"
 elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]] && [[ " $* " == *'checkSuites'* ]]; then
   if [ "${FAKE_CHECK_RUNS_EMPTY:-false}" = true ]; then
     suites='[]'
@@ -407,6 +415,10 @@ git -C "$TMP/merge-enabled" switch -qc agent/delegate
 git -C "$TMP/merge-enabled" remote add origin "$TMP/repository-origin.git"
 git -C "$TMP/merge-enabled" push -q --force origin main agent/delegate
 CFG_MERGE=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/merge-enabled") || { ng "merge-enabled config resolves"; exit 1; }
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_MERGE_STATE=BLOCKED FAKE_RULESET_BYPASS=pull_requests_only python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 0 ] && jq -e '.status=="ready" and .ruleset_bypass.authorized==true and .ruleset_bypass.ruleset_ids==[9001]' <<<"$output" >/dev/null; then ok "current user PR ruleset bypass satisfies zero-approval policy"; else ng "current user PR ruleset bypass was not honored: $output"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_MERGE_STATE=BLOCKED FAKE_RULESET_BYPASS=never python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .ruleset_bypass.authorized==false and (.reasons | index("merge_state:BLOCKED"))' <<<"$output" >/dev/null; then ok "non-bypass user remains review-blocked"; else ng "non-bypass user escaped review requirement: $output"; fi
 expect_json 3 waiting_for_human env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 --approved
 : > "$TMP/gh.log"

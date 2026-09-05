@@ -103,6 +103,8 @@ python3 "${PLUGIN_ROOT}/scripts/control.py" merge --config "$CFG_FILE" --repo "$
 
 required checkがGitHub Appへ固定されている場合、同名の別Appやlegacy StatusContextを成功へ読み替えない。readiness取得不能や100件を超えて完全取得できない場合も停止する。
 
+必要承認数0でGitHubが`BLOCKED`を返した場合は、対象branchへ適用中のRuleset、許可merge method、現在利用者のPR bypass権限を検査する。全条件が確認できたときだけ承認不足を許容し、required checkと未解決threadは通常どおり要求する。
+
 fast-forwardではprotection、checks、thread取得後にPRを最終再取得し、最初のsnapshotとのhead/base一致を含めて再評価する。公開対象はrepository identityから確定した`nameWithOwner`へ固定し、`GH_REPO`などで変更しない。
 
 pushとPR作成は実行時のrepository identity、単一push URL、local/remote head SHAを照合する。`merge_partial`はref更新の成否を否定できない状態なのでmergeを再実行しない。

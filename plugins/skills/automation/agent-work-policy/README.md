@@ -63,6 +63,8 @@ required checkにGitHub App IDが指定されている場合は、head commitの
 local・PR・remoteのhead SHA、PR・remoteのbase SHA、祖先関係、branch protectionのrequired checksを照合し、
 更新後にGitHub上のPRがindirect mergeとして反映されたことまで確認する。
 
+`mergeStateStatus=BLOCKED`でも、policyの必要承認数が0で、対象branchへ適用中のRulesetがPRルールだけを持ち、選択したmerge methodを許可し、現在のGitHub利用者にPR限定または常時のbypass権限がある場合は、承認不足だけをbypassできる。required checkと未解決review threadは引き続き独立に検査し、省略しない。これにより、repository管理者自身のPRは追加承認なし、他の利用者のPRはRulesetどおり管理者承認必須にできる。
+
 既定ではcommit・push・PR作成を許すが、各操作の直前に承認を求める。mergeは既定で禁止し、worktreeやbranchは自動削除しない。`delete_worktree: true`はworktree modeでだけ設定でき、PRのhead branchをcheckoutしたcleanな副worktreeだけを削除する。
 
 ## 適用範囲
