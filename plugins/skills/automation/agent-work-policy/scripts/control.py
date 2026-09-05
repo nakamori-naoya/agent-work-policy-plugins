@@ -590,6 +590,70 @@ query($owner:String!,$name:String!,$number:Int!){
     return sum(1 for item in threads["nodes"] if not item["isResolved"])
 
 
+def pull_request_ruleset_bypass(root, repo_name, base, merge_method, required):
+    rules = gh_json(
+        ["api", f"repos/{repo_name}/rules/branches/{base}"],
+        root,
+        "branch-rules",
+    )
+    if not isinstance(rules, list) or not rules:
+        return {"authorized": False, "ruleset_ids": [], "reason": "no_applied_ruleset"}
+    ruleset_ids = sorted(
+        {
+            item.get("ruleset_id")
+            for item in rules
+            if isinstance(item, dict) and isinstance(item.get("ruleset_id"), int)
+        }
+    )
+    if (
+        not ruleset_ids
+        or any(not isinstance(item, dict) for item in rules)
+        or any(not isinstance(item.get("ruleset_id"), int) for item in rules)
+    ):
+        return {"authorized": False, "ruleset_ids": ruleset_ids, "reason": "invalid_rules"}
+    for rule in rules:
+        if rule.get("type") != "pull_request":
+            return {
+                "authorized": False,
+                "ruleset_ids": ruleset_ids,
+                "reason": f"unsupported_rule:{rule.get('type')}",
+            }
+        parameters = rule.get("parameters") or {}
+        allowed_methods = parameters.get("allowed_merge_methods") or []
+        if merge_method not in allowed_methods:
+            return {
+                "authorized": False,
+                "ruleset_ids": ruleset_ids,
+                "reason": "merge_method_not_allowed",
+            }
+        if (
+            parameters.get("required_review_thread_resolution") is True
+            and not required["require_no_unresolved_threads"]
+        ):
+            return {
+                "authorized": False,
+                "ruleset_ids": ruleset_ids,
+                "reason": "thread_policy_not_enforced",
+            }
+    for ruleset_id in ruleset_ids:
+        details = gh_json(
+            ["api", f"repos/{repo_name}/rulesets/{ruleset_id}"],
+            root,
+            "ruleset-bypass",
+        )
+        if not isinstance(details, dict) or (
+            details.get("enforcement") != "active"
+            or details.get("current_user_can_bypass")
+            not in {"always", "pull_requests_only"}
+        ):
+            return {
+                "authorized": False,
+                "ruleset_ids": ruleset_ids,
+                "reason": "current_user_cannot_bypass",
+            }
+    return {"authorized": True, "ruleset_ids": ruleset_ids, "reason": "authorized"}
+
+
 def merge_readiness(cfg, root, pr_number, info=None):
     info = info or repository_info(cfg, root)
     expected_repo = info["nameWithOwner"]
@@ -600,6 +664,18 @@ def merge_readiness(cfg, root, pr_number, info=None):
     requirements = required_checks(protection) if required["require_checks_passed"] else []
     check_runs = commit_check_runs(root, expected_repo, initial_view.get("headRefOid")) if any(item["kind"] == "check_run" for item in requirements) else []
     unresolved = unresolved_threads(root, expected_repo, pr_number) if required["require_no_unresolved_threads"] else None
+    ruleset_bypass = {"authorized": False, "ruleset_ids": [], "reason": "not_required"}
+    if (
+        initial_view.get("mergeStateStatus") == "BLOCKED"
+        and required["min_approvals"] == 0
+    ):
+        ruleset_bypass = pull_request_ruleset_bypass(
+            root,
+            expected_repo,
+            initial_view.get("baseRefName"),
+            cfg["merge"]["method"],
+            required,
+        )
     state = pull_request_state(cfg, root, expected_repo, pr_number)
     view = state["view"]
     expected_owner = expected_repo.split("/", 1)[0]
@@ -627,7 +703,10 @@ def merge_readiness(cfg, root, pr_number, info=None):
         reasons.append(f"state:{view.get('state')}")
     if view.get("mergeable") != "MERGEABLE":
         reasons.append(f"mergeable:{view.get('mergeable')}")
-    if view.get("mergeStateStatus") != "CLEAN":
+    if view.get("mergeStateStatus") != "CLEAN" and not (
+        view.get("mergeStateStatus") == "BLOCKED"
+        and ruleset_bypass["authorized"]
+    ):
         reasons.append(f"merge_state:{view.get('mergeStateStatus')}")
     if not state["base_branch_matches"]:
         reasons.append("base_branch_mismatch")
@@ -670,6 +749,7 @@ def merge_readiness(cfg, root, pr_number, info=None):
         "conversation_resolution_protected": conversation_protected,
         "admins_protected": admins_protected,
         "unresolved_threads": unresolved,
+        "ruleset_bypass": ruleset_bypass,
         "reasons": reasons,
     }
 

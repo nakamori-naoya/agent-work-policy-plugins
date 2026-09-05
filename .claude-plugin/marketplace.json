@@ -1,3 +1,3 @@
 {"name":"agent-work-policy","owner":{"name":"NaoyaNakamori"},"description":"変更、commit、push、PR、mergeの権限とgateを解決するmarketplace","plugins":[
-  {"name":"agent-work-policy","source":"./plugins/skills/automation/agent-work-policy","description":"repositoryごとの作業権限とhuman gateを解決する","version":"0.2.5"}
+  {"name":"agent-work-policy","source":"./plugins/skills/automation/agent-work-policy","description":"repositoryごとの作業権限とhuman gateを解決する","version":"0.2.6"}
 ]}

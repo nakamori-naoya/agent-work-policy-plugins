@@ -1,6 +1,6 @@
 {
   "name": "agent-work-policy",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "skills": "./skills",
   "description": "AIエージェントのGit作業を、workspace・permission・human gate・merge readinessの設定に従って進める",
   "author": {
