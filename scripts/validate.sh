@@ -2,7 +2,9 @@
 # Scenario: repositoryのplugin集合、manifest、marketplace、構文が一致する
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+python3 "$ROOT/scripts/test-hardening.py" || exit 1
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/plugin-repository-validation.XXXXXX") || exit 2
+export TMPDIR="$TMP_ROOT"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 failed=0
 jq -r '.plugins[].name' "$ROOT/.agents/plugins/marketplace.json" | sort > "$TMP_ROOT/expected"

@@ -41,10 +41,10 @@ cp "$TMP/missing-path.json" "$TMP/repo/.agents/plugins/missing-path.json"
 cp "$TMP/missing-path-claude.json" "$TMP/repo/.claude-plugin/missing-path.json"
 if bash "$CHECK" "$TMP/repo/.agents/plugins/missing-path.json" "$TMP/repo/.claude-plugin/missing-path.json" >/dev/null 2>&1; then echo '  NG: missing skill plugin path was accepted' >&2; FAIL=1; else echo '  ok: missing skill plugin path is rejected'; fi
 
-rm "$TMP/repo/plugins/skills/automation/agent-work-policy/SKILL.md"
+rm "$TMP/repo/plugins/skills/automation/agent-work-policy/skills/work-with-policy/SKILL.md"
 if bash "$CHECK" "$TMP/repo/.agents/plugins/marketplace.json" "$TMP/repo/.claude-plugin/marketplace.json" >/dev/null 2>&1; then echo '  NG: plugin without root SKILL.md was accepted' >&2; FAIL=1; else echo '  ok: plugin without root SKILL.md is rejected'; fi
 
-cp "$ROOT/plugins/skills/automation/agent-work-policy/SKILL.md" "$TMP/repo/plugins/skills/automation/agent-work-policy/SKILL.md"
+cp "$ROOT/plugins/skills/automation/agent-work-policy/skills/work-with-policy/SKILL.md" "$TMP/repo/plugins/skills/automation/agent-work-policy/skills/work-with-policy/SKILL.md"
 jq 'del(.interface.capabilities)' "$TMP/repo/plugins/skills/automation/agent-work-policy/.codex-plugin/plugin.json" > "$TMP/no-capabilities.json"
 mv "$TMP/no-capabilities.json" "$TMP/repo/plugins/skills/automation/agent-work-policy/.codex-plugin/plugin.json"
 if bash "$CHECK" "$TMP/repo/.agents/plugins/marketplace.json" "$TMP/repo/.claude-plugin/marketplace.json" >/dev/null 2>&1; then echo '  NG: plugin without Skills capability was accepted' >&2; FAIL=1; else echo '  ok: plugin without Skills capability is rejected'; fi
