@@ -47,12 +47,5 @@ repo="${repo:-$PWD}"
 [ -d "$repo" ] || { echo "[error] repo directoryが無い: $repo" >&2; exit 2; }
 [ -x "$PLUGIN_ROOT/scripts/resolve.sh" ] || { echo "[error] resolverが無い: $PLUGIN_ROOT/scripts/resolve.sh" >&2; exit 2; }
 
-name=$(basename "$PLUGIN_ROOT")
-cfg=$(mktemp "${TMPDIR:-/tmp}/${name}.resolved.XXXXXX") || exit 2
-if ! bash "$PLUGIN_ROOT/scripts/resolve.sh" "$repo" --explain ${scope_arg:+"$scope_arg"} \
-  ${overrides[@]+"${overrides[@]}"} > "$cfg"; then
-  rm -f "$cfg"
-  exit 2
-fi
-[ -s "$cfg" ] || { rm -f "$cfg"; echo "[error] 解決済みYAMLが空" >&2; exit 2; }
-printf '%s\n' "$cfg"
+exec python3 "$SCRIPT_DIR/run-config.py" create --root "$PLUGIN_ROOT" -- "$repo" --explain ${scope_arg:+"$scope_arg"} \
+  ${overrides[@]+"${overrides[@]}"}
