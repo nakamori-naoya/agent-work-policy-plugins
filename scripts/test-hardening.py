@@ -471,6 +471,83 @@ class Hardening(unittest.TestCase):
             self.assertEqual(result.returncode, 2, code + ': ' + result.stdout)
             self.assertIn('[error:' + code + ']', result.stderr)
 
+    def test_generic_rule_is_diagnosed_before_distribution_validator(self):
+        """固有 validator が落とす設定でも、汎用の依存規則の診断が先に出る。"""
+        if not (ROOT/'shared/playbook/resolve.sh').exists(): self.skipTest('no playbook resolver')
+        provider = self._provider('provider', 'write-doc', 'write-doc', 'write-doc/write-doc',
+                                  'content-types')
+        devmap = self._devmap({'write-doc/write-doc': provider})
+        environment = dict(self.env, HARNESS_PLUGIN_DEV_ROOTS=str(devmap),
+                           XDG_CONFIG_HOME=str(self.base/'config'))
+
+        def run(steps):
+            entry = self._consumer(steps, [('local-tool', 'demo'), ('write-doc', 'write-doc')])
+            validator = entry/'scripts/validate-config.sh'
+            validator.write_text('#!/usr/bin/env bash\necho "[error] 配布物固有の言い分" >&2\nexit 2\n')
+            validator.chmod(0o755)
+            return subprocess.run(['bash', str(entry/'scripts/resolve.sh'), str(self.base/'consumer')],
+                                  text=True, capture_output=True, env=environment, timeout=60)
+
+        # 規則違反は、固有 validator が何を言おうと汎用の error code で観測できる。
+        violation = run('  - {id: work, skill: entry-skill, purpose: fixture, provides: [x]}\n')
+        self.assertEqual(violation.returncode, 2, violation.stdout)
+        self.assertIn('[error:external-dependency-skill]', violation.stderr)
+        self.assertNotIn('配布物固有の言い分', violation.stderr)
+        # 規則に適う設定なら、これまでどおり固有 validator まで進んで落ちる。
+        allowed = run('  - {id: work, playbook: write-doc, purpose: fixture, provides: [x]}\n')
+        self.assertEqual(allowed.returncode, 2, allowed.stdout)
+        self.assertIn('配布物固有の言い分', allowed.stderr)
+
+    def test_runtime_follows_cache_root_not_ambient_environment(self):
+        """shell に CODEX_HOME があるだけで、claude の cache を codex と呼ばない。"""
+        resolver = ROOT/'shared/playbook/resolve-dependency.py'
+        if not resolver.exists(): self.skipTest('no playbook resolver')
+        homes = {'claude': self.base/'claude-home', 'codex': self.base/'codex-home'}
+        environment = dict(self.env, CLAUDE_CONFIG_DIR=str(homes['claude']),
+                           CODEX_HOME=str(homes['codex']))
+        for name in ('HARNESS_PLUGIN_RUNTIME', 'CLAUDE_PLUGIN_ROOT',
+                     'CLAUDE_PLUGIN_CACHE', 'CODEX_PLUGIN_CACHE'):
+            environment.pop(name, None)
+        for expected, home in homes.items():
+            relative = f'{home.name}/plugins/cache/write-doc/write-doc/1.0.0'
+            package = self._provider(relative, 'write-doc', 'write-doc',
+                                     'write-doc/write-doc', 'content-types')
+            entry = package/'playbooks/pb'
+            (entry/'scripts/resolve-dependency.py').write_bytes(resolver.read_bytes())
+            result = subprocess.run(
+                ['python3', str(entry/'scripts/resolve-dependency.py'), '--plugin-root', str(entry),
+                 '--plugin', 'content-types', '--marketplace', 'write-doc'],
+                text=True, capture_output=True, env=environment, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['runtime'], expected, result.stdout)
+
+    def test_playbook_step_input_is_recorded_with_resolved_values(self):
+        """playbook: step の input は参照形のまま残し、解けた値を input_resolved に併記する。"""
+        if not (ROOT/'shared/playbook/resolve.sh').exists(): self.skipTest('no playbook resolver')
+        provider = self._provider('provider', 'write-doc', 'write-doc', 'write-doc/write-doc',
+                                  'content-types', types=['north-star'])
+        devmap = self._devmap({'write-doc/write-doc': provider})
+        environment = dict(self.env, HARNESS_PLUGIN_DEV_ROOTS=str(devmap),
+                           XDG_CONFIG_HOME=str(self.base/'config'))
+        entry = self._consumer(
+            '  - {id: work, playbook: write-doc, purpose: fixture, provides: [x],\n'
+            '     input: {document_type: "${.document_type}", name: fixture.md, at: "${.missing}"}}\n'
+            '  - {id: local, skill: do-local, purpose: fixture, needs: [x],\n'
+            '     input: {document_type: "${.document_type}"}}\n',
+            [('local-tool', 'demo'), ('write-doc', 'write-doc')])
+        result = subprocess.run(['bash', str(entry/'scripts/resolve.sh'), str(self.base/'consumer')],
+                                text=True, capture_output=True, env=environment, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        steps = {step['id']: step for step in json.loads(
+            subprocess.run(['yq', '-o=json', '-I=0', '.playbook.steps'], input=result.stdout,
+                           text=True, capture_output=True, timeout=30).stdout)}
+        # 参照形は残す。解けた分だけを併記し、解けない参照は載せない。
+        self.assertEqual(steps['work']['input']['document_type'], '${.document_type}')
+        self.assertEqual(steps['work']['input_resolved'],
+                         {'document_type': 'north-star', 'name': 'fixture.md'})
+        # playbook: 以外の step は対象外。
+        self.assertNotIn('input_resolved', steps['local'])
+
     def test_bindings_reject_bad_key_missing_implements_and_drift(self):
         if not (ROOT/'shared/playbook/resolve.sh').exists(): self.skipTest('no playbook resolver')
         provider = self._provider('provider', 'write-doc', 'write-doc', 'write-doc/write-doc',

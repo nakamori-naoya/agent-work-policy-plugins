@@ -122,24 +122,53 @@ def resolved_descendant(root: Path, raw: str, plugin: str, source_kind: str) -> 
     return Path(candidate)
 
 
+def runtime_cache_roots() -> dict[str, list[Path]]:
+    """runtime ごとの既知 installed cache root。明示の cache 指定、設定 directory
+    （CLAUDE_CONFIG_DIR / CODEX_HOME）から導いた場所、既定の順に見る。"""
+
+    def roots(cache_env: str, home_env: str, default_home: str) -> list[Path]:
+        found: list[Path] = []
+        override = os.environ.get(cache_env, "")
+        if override:
+            found.append(Path(override))
+        home = os.environ.get(home_env, "")
+        if home:
+            found.append(Path(home) / "plugins" / "cache")
+        found.append(Path.home() / default_home / "plugins" / "cache")
+        return found
+
+    return {
+        "claude": roots("CLAUDE_PLUGIN_CACHE", "CLAUDE_CONFIG_DIR", ".claude"),
+        "codex": roots("CODEX_PLUGIN_CACHE", "CODEX_HOME", ".codex"),
+    }
+
+
 def runtime_for(plugin_root: Path) -> str:
     explicit = os.environ.get("HARNESS_PLUGIN_RUNTIME", "")
     if explicit:
         if explicit not in {"claude", "codex"}:
             fail("dependency-runtime-unresolved", runtime=explicit)
         return explicit
-    if os.environ.get("CLAUDE_PLUGIN_ROOT"):
-        return "claude"
-    if os.environ.get("CODEX_HOME"):
-        return "codex"
-    candidates = {
-        "claude": Path(os.environ.get("CLAUDE_PLUGIN_CACHE", Path.home() / ".claude/plugins/cache")),
-        "codex": Path(os.environ.get("CODEX_PLUGIN_CACHE", Path.home() / ".codex/plugins/cache")),
-    }
+    # **解決しようとしている plugin_root がどの cache に入っているか**を、
+    # 環境変数の有無より先に見る。shell に CODEX_HOME があるだけで
+    # Claude Code の cache を codex と呼んでしまう事故を防ぐ。
     resolved = plugin_root.resolve()
-    detected = [name for name, root in candidates.items() if root.exists() and contained(root.resolve(), resolved)]
+    detected = sorted(
+        {
+            name
+            for name, roots in runtime_cache_roots().items()
+            for root in roots
+            if root.exists() and contained(root.resolve(), resolved)
+        }
+    )
     if len(detected) == 1:
         return detected[0]
+    if not detected:
+        # cache の外（開発中の checkout など）なら、動いている runtime を環境から推す。
+        if os.environ.get("CLAUDE_PLUGIN_ROOT"):
+            return "claude"
+        if os.environ.get("CODEX_HOME"):
+            return "codex"
     fail("dependency-runtime-unresolved", plugin_root=str(plugin_root))
 
 
@@ -993,6 +1022,27 @@ def command_check_input(argv: list[str]) -> int:
     return 0
 
 
+def command_resolve_inputs(config: dict) -> int:
+    """解決済み設定の `playbook:` step に input_resolved を足して書き戻す。
+
+    `input` は参照形（`${.document_type}`）のまま残す。値の出どころを追えなくなるからだ。
+    静的に解けた分だけを別キーへ併記して、解決済み YAML を読むだけで
+    実際に渡る値が分かるようにする。解けない（実行時に決まる）キーは載せない。
+    足すのは生成物側だけで、同梱 playbook.yml と設定の未知キー検査には触れない。"""
+    for step in config.get("playbook", {}).get("steps", []):
+        if "playbook" not in step or not isinstance(step.get("input"), dict):
+            continue
+        resolved = {}
+        for key in step["input"]:
+            value = resolve_step_input(config, step, key)
+            if value is not None:
+                resolved[key] = value
+        if resolved:
+            step["input_resolved"] = resolved
+    print(json.dumps(config, ensure_ascii=False, separators=(",", ":")))
+    return 0
+
+
 def command_explain(config: dict) -> int:
     """--explain の本文。論理名 → 既定実体 → 採用実体、出典層、分類を出す。"""
     playbook = config.get("playbook", {})
@@ -1054,6 +1104,8 @@ def main() -> int:
         config = json.load(sys.stdin)
         check_steps(config, sys.argv[2] if len(sys.argv) == 3 else None)
         return 0
+    if len(sys.argv) > 1 and sys.argv[1] == "--resolve-inputs":
+        return command_resolve_inputs(json.load(sys.stdin))
     if len(sys.argv) > 1 and sys.argv[1] == "--explain-config":
         return command_explain(json.load(sys.stdin))
     if len(sys.argv) > 1 and sys.argv[1] == "--create-lock":
