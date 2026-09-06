@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import sys
 
-VERSION = '2.4.1'
+VERSION = '2.4.2'
 NAMES = ['resolve-dependency.py', 'resolve.sh', 'state.py', 'validate-distribution.py', 'prepare.sh', 'run-config.py', 'doctor.py', 'release.py', 'evaluate-skills.py', 'claude-eval-adapter.py', 'sync-runtime.py', 'test-hardening.py', 'lint-consumer-contract.py', 'validate.yml']
 REPO_SCRIPTS = ['doctor.py', 'release.py', 'evaluate-skills.py', 'claude-eval-adapter.py', 'sync-runtime.py', 'test-hardening.py', 'lint-consumer-contract.py']
 PLAYBOOK_SCRIPTS = ['resolve.sh', 'resolve-dependency.py', 'state.py']

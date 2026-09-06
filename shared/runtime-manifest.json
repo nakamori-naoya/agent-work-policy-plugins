@@ -3,10 +3,10 @@
   "source": {
     "repository": "product-planning-plugins",
     "path": "shared/runtime-source",
-    "version": "2.4.1",
+    "version": "2.4.2",
     "files": {
-      "resolve-dependency.py": "56abe8f4344a55d14539f498535a6d811c383724a399ca1dbcc10a3f2e7ecb82",
-      "resolve.sh": "fed9158985485d2da2ea616665d98d43cd36f6a0fff135b4ce673e1e4f7a40ed",
+      "resolve-dependency.py": "d6082b8b36afbba0218c122f431171f83604c3fe61d6b488c9516efe0656fffd",
+      "resolve.sh": "7dee8c589d9f9e525ce41cc0ad4cbd519881ac8a932dee72c50b0a5d32aa9174",
       "state.py": "5571cdec8eb4bd4524364e8f2764097068ffe485d5b51c531086e47127c09cfa",
       "validate-distribution.py": "fdc48c31a9404bd494c5d8481054ab26eb964327050f12e30b05beebc08463cb",
       "prepare.sh": "5035f21ddb9c8e19fa980d310c58387b5585576009c0eb997c7b2893499fb0fa",
@@ -15,8 +15,8 @@
       "release.py": "281880055f52c48e5c2e64931150f369b8fc2f97c004ac05c82ecb4bcf275fb6",
       "evaluate-skills.py": "43272002c9183dfbb7a0f0d5658c06a47e9b8c1e97aa209d8889802a0a8eab9d",
       "claude-eval-adapter.py": "3189453325a50d6c28dd808f40acb44eb2e6c40a7e56b4a39e18579b8f37e8f9",
-      "sync-runtime.py": "409544c0faba33177ce58703b05b54049211879e67f32a655fa7a2297fad6461",
-      "test-hardening.py": "ad980b29c996866454ee837c726404e6eb285b8af37f4c5b0c730a11911fd3f2",
+      "sync-runtime.py": "e39e91a9a75d502799dcae06c2710c6e81d5c8f32bdb5b34a2a31768b4819b11",
+      "test-hardening.py": "c3573a87fb67894a534eefe82bdacc5dca7a26b13502b1ea3f60626ed738765e",
       "lint-consumer-contract.py": "4c82db55dcc10d21810963d9f56ce0943e0a8d09c068c10f9b70c48a9b89901d",
       "validate.yml": "e916200e0ecae307fbdbee77b6e2feed095ab1bc43a651c0e97a75ecd1347071"
     }
@@ -24,8 +24,8 @@
   "targets": {
     ".github/workflows/validate.yml": "e916200e0ecae307fbdbee77b6e2feed095ab1bc43a651c0e97a75ecd1347071",
     "plugins/playbooks/automation/agent-work-policy/scripts/prepare.sh": "5035f21ddb9c8e19fa980d310c58387b5585576009c0eb997c7b2893499fb0fa",
-    "plugins/playbooks/automation/agent-work-policy/scripts/resolve-dependency.py": "56abe8f4344a55d14539f498535a6d811c383724a399ca1dbcc10a3f2e7ecb82",
-    "plugins/playbooks/automation/agent-work-policy/scripts/resolve.sh": "fed9158985485d2da2ea616665d98d43cd36f6a0fff135b4ce673e1e4f7a40ed",
+    "plugins/playbooks/automation/agent-work-policy/scripts/resolve-dependency.py": "d6082b8b36afbba0218c122f431171f83604c3fe61d6b488c9516efe0656fffd",
+    "plugins/playbooks/automation/agent-work-policy/scripts/resolve.sh": "7dee8c589d9f9e525ce41cc0ad4cbd519881ac8a932dee72c50b0a5d32aa9174",
     "plugins/playbooks/automation/agent-work-policy/scripts/run-config.py": "88b649f0b530238ac36a7470896abea5ff3efd4f4538643746d0476681b0f2ae",
     "plugins/playbooks/automation/agent-work-policy/scripts/state.py": "5571cdec8eb4bd4524364e8f2764097068ffe485d5b51c531086e47127c09cfa",
     "plugins/skills/automation/work-policy-control/scripts/prepare.sh": "5035f21ddb9c8e19fa980d310c58387b5585576009c0eb997c7b2893499fb0fa",
@@ -35,11 +35,11 @@
     "scripts/evaluate-skills.py": "43272002c9183dfbb7a0f0d5658c06a47e9b8c1e97aa209d8889802a0a8eab9d",
     "scripts/lint-consumer-contract.py": "4c82db55dcc10d21810963d9f56ce0943e0a8d09c068c10f9b70c48a9b89901d",
     "scripts/release.py": "281880055f52c48e5c2e64931150f369b8fc2f97c004ac05c82ecb4bcf275fb6",
-    "scripts/sync-runtime.py": "409544c0faba33177ce58703b05b54049211879e67f32a655fa7a2297fad6461",
-    "scripts/test-hardening.py": "ad980b29c996866454ee837c726404e6eb285b8af37f4c5b0c730a11911fd3f2",
+    "scripts/sync-runtime.py": "e39e91a9a75d502799dcae06c2710c6e81d5c8f32bdb5b34a2a31768b4819b11",
+    "scripts/test-hardening.py": "c3573a87fb67894a534eefe82bdacc5dca7a26b13502b1ea3f60626ed738765e",
     "scripts/validate-distribution.py": "fdc48c31a9404bd494c5d8481054ab26eb964327050f12e30b05beebc08463cb",
-    "shared/playbook/resolve-dependency.py": "56abe8f4344a55d14539f498535a6d811c383724a399ca1dbcc10a3f2e7ecb82",
-    "shared/playbook/resolve.sh": "fed9158985485d2da2ea616665d98d43cd36f6a0fff135b4ce673e1e4f7a40ed",
+    "shared/playbook/resolve-dependency.py": "d6082b8b36afbba0218c122f431171f83604c3fe61d6b488c9516efe0656fffd",
+    "shared/playbook/resolve.sh": "7dee8c589d9f9e525ce41cc0ad4cbd519881ac8a932dee72c50b0a5d32aa9174",
     "shared/playbook/state.py": "5571cdec8eb4bd4524364e8f2764097068ffe485d5b51c531086e47127c09cfa",
     "shared/prepare.sh": "5035f21ddb9c8e19fa980d310c58387b5585576009c0eb997c7b2893499fb0fa",
     "shared/run-config.py": "88b649f0b530238ac36a7470896abea5ff3efd4f4538643746d0476681b0f2ae"
