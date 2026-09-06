@@ -34,46 +34,64 @@ repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを�
 
 ## インストール
 
+インストールするのは`agent-work-policy@agent-work-policy`です。外部プラグインの追加は不要です。
+
+内部のスキルは同梱されています。個別にインストールせず、公開入口から利用してください。
+
 ### Codex
 
-Codexのpluginコマンドには`--scope`がない。通常の手順はuser単位でmarketplaceとpluginを登録する。
+利用するCodexと同じ設定環境で実行してください。
 
 ```bash
 codex plugin marketplace add nakamori-naoya/agent-work-policy-plugins
 codex plugin add agent-work-policy@agent-work-policy
+codex plugin list
 ```
 
-このrepositoryだけに分離したい場合は、repository専用の`CODEX_HOME`を作り、インストール時と利用時に同じ値を指定する。
-
-```bash
-mkdir -p .codex-home
-export CODEX_HOME="$PWD/.codex-home"
-
-codex plugin marketplace add nakamori-naoya/agent-work-policy-plugins
-codex plugin add agent-work-policy@agent-work-policy
-codex
-```
-
-`CODEX_HOME`には認証、設定、ログ、session、plugin metadataも保存されるため、このdirectoryはGit管理しない。
+一覧で導入先を確認し、新しい会話で利用してください。
 
 ### Claude Code
 
-Claude Codeは次のscopeを選べる。
-
-| scope | 対象 |
-|---|---|
-| `user` | user全体。省略時の既定値 |
-| `project` | このrepositoryで有効にする設定をGitでチーム共有する |
-| `local` | このrepositoryで有効にするが、Git共有せず自分だけで使う |
-
-repository設定としてインストールする場合は`project`を指定する。`CLAUDE_PLUGIN_SCOPE`を`user`または`local`へ変えれば、同じ手順でscopeを切り替えられる。
+次は自分の全プロジェクトで使う例です。このプロジェクトのチームで共有する場合は`project`、このプロジェクトで自分だけが使う場合は`local`に変更し、利用先のディレクトリで実行してください。
 
 ```bash
-CLAUDE_PLUGIN_SCOPE=project
-
+CLAUDE_PLUGIN_SCOPE=user
 claude plugin marketplace add nakamori-naoya/agent-work-policy-plugins --scope "$CLAUDE_PLUGIN_SCOPE"
 claude plugin install agent-work-policy@agent-work-policy --scope "$CLAUDE_PLUGIN_SCOPE"
+claude plugin list
 ```
+
+一覧で導入を確認し、Claude Codeを再起動してください。すでに導入しているパッケージは、次の更新手順を使ってください。
+
+## 更新する
+
+GitHubから登録したmarketplaceを更新し、その公開パッケージを更新します。新規インストールと同じCodexの設定環境、Claude Codeの適用範囲を使ってください。
+
+### Codex
+
+```bash
+codex plugin marketplace upgrade agent-work-policy
+codex plugin add agent-work-policy@agent-work-policy
+codex plugin list
+```
+
+更新後は新しい会話で確認してください。ローカルのパスからmarketplaceを登録した場合は、Git版の更新コマンドではなく、その登録先のソースを更新してから追加し直します。
+
+### Claude Code
+
+```bash
+# インストール時に合わせてuser / project / localを選ぶ
+CLAUDE_PLUGIN_SCOPE=user
+claude plugin marketplace update agent-work-policy
+claude plugin update agent-work-policy@agent-work-policy --scope "$CLAUDE_PLUGIN_SCOPE"
+claude plugin list
+```
+
+更新後はClaude Codeを再起動してください。
+
+marketplaceの取得と、インストール済みパッケージの更新は分けて確認します。同じバージョンとして公開された変更は、更新コマンドだけでは反映されない場合があります。「最新」と表示された場合は公開バージョンを確認し、キャッシュ内のファイルを直接編集しないでください。
+
+コマンドは2026-09-06時点のCLIヘルプと、[Codexのmarketplace管理](https://developers.openai.com/plugins/build/plugins)、[Claude Codeの更新仕様](https://code.claude.com/docs/en/plugins-reference#plugin-update)を確認しています。
 
 ## 依存plugin
 
