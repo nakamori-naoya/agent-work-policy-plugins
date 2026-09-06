@@ -37,10 +37,10 @@ while IFS='|' read -r source name version; do
   case "$plugin_root" in "$marketplace_root"/plugins/skills/*) ;; *) exit 1 ;; esac
   jq -e --arg name "$name" --arg version "$version" '
     .name == $name and .version == $version and
-    .skills == "./skills" and
+    .skills == ["./skills/work-with-policy"] and
     (.interface.capabilities | type == "array" and index("Skills") != null)
   ' "$plugin_root/.codex-plugin/plugin.json" >/dev/null || exit 1
   jq -e --arg name "$name" --arg version "$version" '
-    .name == $name and .version == $version and .skills == "./skills"
+    .name == $name and .version == $version and .skills == "./skills/"
   ' "$plugin_root/.claude-plugin/plugin.json" >/dev/null || exit 1
 done < <(jq -r '.plugins[] | [.source.path,.name,.version] | join("|")' "$agents_marketplace")
