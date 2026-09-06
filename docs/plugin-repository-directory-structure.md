@@ -1,4 +1,6 @@
-# Plugin repository 群のコード地図
+# 2026-09-02時点のPlugin repository群の調査記録
+
+この資料は記載されたコミット時点の調査記録です。現在のインストール対象と配布方針は[プラグインの配布単位とインストール](plugin-distribution-guidelines.md)を参照してください。
 
 > 型: コード地図（マクロ） ／ 読み手: この workspace の plugin を追加・変更・レビューする人 ／ 対象: 10の `*-plugins` repository
 

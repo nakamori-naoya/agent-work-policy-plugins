@@ -1,131 +1,56 @@
-# Plugin 配布境界ガイドライン
+# プラグインの配布単位とインストール
 
-> 型: コンセプトドキュメント ／ 読み手: この workspace 配下の marketplace repository を保守する人
+このリポジトリ群では、利用者が仕事を依頼する公開パッケージをインストールする。文書の型選択やレビューなど、途中の処理は同じパッケージに含める。内部のスキル名はインストール対象ではない。
 
-> 一言でいうと——**plugin として配布する単位は、marketplace catalog の `source` が指す plugin root である。** Repository に置かれた全ファイルを、個別 plugin のインストール物とみなしてはならない。
+## 何をインストールするか
 
-- **[最重要]** **Git repository の公開範囲と、plugin のインストール範囲を分けて判断する。**
-- **[ポイント]** **実行時に必要なものは plugin root 内で自己完結させる。** Repository root の `shared/` へ実行時依存を作らない。
-- **[ポイント]** **配布対象は両 runtime の marketplace catalog と plugin manifest で一致させる。**
+2026-09-06に各リポジトリのmainにある配布定義を確認した。10リポジトリから11パッケージを公開している。名前と配布元の組を使い、各READMEのコマンドで導入する。
 
-確認時点は 2026-09-02 である。対象は、この workspace 直下にある10の `*-plugins` marketplace repository である。構成比較は、関連するコード地図に記載した各 `main` HEADを固定参照点にする。
-
-## 概要
-
-**この repository 群の配布境界は、repository 公開物、marketplace catalog、plugin package の3層で定義する。** Git へ commit したファイルは repository の閲覧・clone 対象になる。個別 plugin のインストール物は、catalog が指す leaf directory の配下だけである。
-
-**Marketplace catalog は plugin package の一覧と入口を定義する。** Codex は `.agents/plugins/marketplace.json` の `plugins[].source.path` を使う。Claude Code は `.claude-plugin/marketplace.json` の `plugins[].source` を使う。現在の43 entryでは、両者の plugin 名、version、source path が一致している。
-
-**Plugin root はインストール後に単独で動ける配布単位である。** 多くは `plugins/skills/<領域>/<plugin>/` または `plugins/playbooks/<領域>/<plugin>/` にあり、領域を持たない `plugins/<plugin>/` もある。兄弟 plugin と repository root は、同じ repository にあっても自動では同梱されない。
-
-![Repository公開物とpluginインストール物の境界](assets/plugin-distribution-boundary.svg)
-
-*図1: Catalog は repository 内の leaf plugin root を選ぶ。Install cache へ渡る境界は、その root の内側で閉じる。*
-
-| 境界 | 含むもの | 個別 plugin install への扱い |
+| リポジトリ | 公開パッケージ | 外部の依存 |
 |---|---|---|
-| Repository 公開物 | tracked file、catalog、plugin source、開発用 script、test、資料 | Repository としては取得できるが、全体を1 plugin として扱わない |
-| Marketplace catalog | plugin 名、version、source path、runtime 固有 metadata | Marketplace 登録と plugin 選択に使う。個別 plugin payload そのものではない |
-| Plugin package | catalog の source が指す directory 配下 | 選択した plugin のインストール対象 |
-| Runtime 生成物 | resolved config、state、収集物、生成資料、cache | Source packageへ commit・同梱しない |
+| [agent-fleet-plugins](https://github.com/nakamori-naoya/agent-fleet-plugins#インストール) | `agent-fleet-core@agent-fleet`、`agent-fleet-herdr@agent-fleet` | `agent-roles@agent-roles` |
+| [agent-roles-plugins](https://github.com/nakamori-naoya/agent-roles-plugins#インストール) | `agent-roles@agent-roles` | なし |
+| [agent-work-policy-plugins](https://github.com/nakamori-naoya/agent-work-policy-plugins#インストール) | `agent-work-policy@agent-work-policy` | なし |
+| [bdd-discovery-and-formulation-plugins](https://github.com/nakamori-naoya/bdd-discovery-and-formulation-plugins#インストール) | `bdd-discovery-and-formulation@bdd-discovery-and-formulation` | `grill@grill`、`write-doc@write-doc` |
+| [collect-and-digest-plugins](https://github.com/nakamori-naoya/collect-and-digest-plugins#インストール) | `collect-and-digest@collect-and-digest` | `write-doc@write-doc` |
+| [grill-plugins](https://github.com/nakamori-naoya/grill-plugins#インストール) | `grill@grill` | なし |
+| [product-planning-plugins](https://github.com/nakamori-naoya/product-planning-plugins#インストール) | `product-planning@product-planning` | `grill@grill`、`write-doc@write-doc` |
+| [pull-request-plugins](https://github.com/nakamori-naoya/pull-request-plugins#インストール) | `pull-request@pull-request` | `write-doc@write-doc`、`agent-work-policy@agent-work-policy` |
+| [skill-authoring-plugins](https://github.com/nakamori-naoya/skill-authoring-plugins#インストール) | `skill-authoring@skill-authoring` | なし |
+| [write-doc-plugins](https://github.com/nakamori-naoya/write-doc-plugins#インストール) | `write-doc@write-doc` | なし |
 
-### 現在配布している marketplace と plugin
+Agent FleetはCoreとHerdr連携を分ける。CoreだけならHerdrは不要で、役割を渡すHookはHerdrに含まれる。grillやagent-rolesなど単独の仕事を扱うパッケージもあるため、すべてのパッケージが複数工程のplaybookを持つわけではない。
 
-**10 marketplace は合計43 entryを公開している。** `intermediate-cleanup` は2 marketplaceに別々の source rootを持つため、plugin名の種類として数えると42になる。依存解決と変更判断では、marketplace名とplugin名の組を使う。
+## 文書作成を例に、配布範囲を追う
 
-| Marketplace repository | 件数 | Plugin |
-|---|---:|---|
-| [agent-fleet-plugins](https://github.com/nakamori-naoya/agent-fleet-plugins/blob/main/.agents/plugins/marketplace.json) | 3 | `agent-fleet-core`、`agent-fleet-herdr`、`agent-fleet-session-hooks` |
-| [agent-roles-plugins](https://github.com/nakamori-naoya/agent-roles-plugins/blob/main/.agents/plugins/marketplace.json) | 1 | `agent-roles` |
-| [agent-work-policy-plugins](https://github.com/nakamori-naoya/agent-work-policy-plugins/blob/main/.agents/plugins/marketplace.json) | 1 | `agent-work-policy` |
-| [bdd-discovery-and-formulation-plugins](https://github.com/nakamori-naoya/bdd-discovery-and-formulation-plugins/blob/main/.agents/plugins/marketplace.json) | 12 | `domain-bdd-discovery`、`domain-bdd-formulation`、`data-model-bdd-discovery`、`data-model-bdd-formulation`、`user-journey-bdd-discovery`、`user-journey-bdd-formulation`、`domain-events`、`core-domain`、`user-journey`、`persistence-scenarios`、`data-model`、`rdb-design` |
-| [collect-and-digest-plugins](https://github.com/nakamori-naoya/collect-and-digest-plugins/blob/main/.agents/plugins/marketplace.json) | 5 | `meeting-collect`、`session-collect`、`slack-collect`、`digest`、`session-digest` |
-| [grill-plugins](https://github.com/nakamori-naoya/grill-plugins/blob/main/.agents/plugins/marketplace.json) | 1 | `grill` |
-| [product-planning-plugins](https://github.com/nakamori-naoya/product-planning-plugins/blob/main/.agents/plugins/marketplace.json) | 7 | `product-context`、`product-north-star`、`product-strategy`、`strategy-critique`、`intermediate-cleanup`、`product-north-star-planning`、`product-strategy-planning` |
-| [pull-request-plugins](https://github.com/nakamori-naoya/pull-request-plugins/blob/main/.agents/plugins/marketplace.json) | 8 | `pr-conflict-inspect`、`pr-conflict-resolve`、`pr-create`、`pull-request`、`pr-review-assess`、`pr-review-apply`、`pr-review-verify`、`pr-review-response` |
-| [skill-authoring-plugins](https://github.com/nakamori-naoya/skill-authoring-plugins/blob/main/.agents/plugins/marketplace.json) | 1 | `skill-authoring` |
-| [write-doc-plugins](https://github.com/nakamori-naoya/write-doc-plugins/blob/main/.agents/plugins/marketplace.json) | 5 | `write-doc`、`content-types`、`writing-rules`、`visual-guidance`、`doc-render` |
+`write-doc@write-doc`をインストールすると、配布定義が指す`plugins/`が一つのパッケージとして取得される。公開入口はwrite-docで、型選択・執筆・図・保存・完成文書の確認はその内部でつながる。writing-rulesやreview-docを別々にインストールする必要はない。
 
-### Plugin root 内で配布するもの
+一方、product-planningから資料作成を頼む場合、write-docは別リポジトリの公開パッケージである。product-planningの内部へ複製せず、外部依存として別途インストールする。この違いは、機能の数ではなくパッケージの境界で決まる。
 
-**実行時に読むファイルは、用途に応じて plugin root 内へ置く。** すべての directory を空で揃える必要はない。manifest capability と plugin の責務に必要なものだけを置く。
+## 配布定義をどこで確かめるか
 
-| 置き場 | 責務 | 配布判断 |
+| 確認したいこと | 読む場所 | 判断すること |
 |---|---|---|
-| `.codex-plugin/plugin.json` | Codex 向け identity、version、capability、UI metadata | 必須 |
-| `.claude-plugin/plugin.json` | Claude Code 向け identity、version、skill path | 必須 |
-| `skills/` | Runtime が発見する skill entry | Skill を公開する plugin で配布 |
-| `SKILL.md` | Plugin 固有手順の正本 | 単一入口の skill / playbook で配布。複数 skill や script-only は例外 |
-| `playbook.yml` | 工程、依存、入出力、停止条件 | Playbook plugin で配布 |
-| `scripts/` | 設定解決、検査、保存などの決定的処理 | 実行に必要な script を配布 |
-| `references/` | 実行中に必要時だけ読む契約・方法論 | 参照する plugin で配布 |
-| `config/defaults.yml` | 同梱既定と設定 schema の基準 | 静的設定を持つ plugin で配布 |
-| `assets/` | Template、example、画像、render shell | 生成・描画に必要な plugin で配布 |
-| `README.md` | 個別 plugin の利用法と設定 | Plugin 単体の説明として配布 |
+| インストール対象の名前と範囲 | `.agents/plugins/marketplace.json`、`.claude-plugin/marketplace.json` | 公開名とsourceの指すパッケージ |
+| 利用者へ見せる入口 | パッケージ直下の両`plugin.json`の`skills` | 公開スキルの所在 |
+| 同梱する工程と内部処理 | `metadata.harness.playbooks`、`internalPlugins` | 公開入口から使う同梱機能 |
+| 外部へ依頼する処理 | 各`playbook.yml`の依存宣言 | 別途必要な公開パッケージ |
+| 配布の整合性 | `scripts/validate.sh` | 両環境の配布定義とリポジトリ固有の検証 |
 
-### Plugin として配布しないもの
+配布定義のsourceが`./plugins`なら、その配下をまとめて配布する。単一機能やFleetのsourceが個別のディレクトリを指す場合は、その範囲を配布する。フォルダ名がskillsやplaybooksであることだけで、個別インストール対象と判断しない。
 
-**Repository root の開発資産は、個別 plugin packageへ混入させない。** ただしGit repositoryの公開物ではあるため、「非公開」ではなく「plugin installの対象外」と表現する。
+リポジトリ直下のREADME、AGENTS.md、開発用scripts、tests、sharedは、パッケージの外にある開発資産である。実行時に必要なコードや資料は配布範囲に置き、インストール先からリポジトリ直下を参照しない。
 
-| Repository root の置き場 | 責務 | Plugin install への扱い |
-|---|---|---|
-| `README.md` | Marketplace 全体の説明と導入 | 対象外。Plugin 内 `README.md` とは別物 |
-| `AGENTS.md` | Source repository を変更する agent 向け規範 | 対象外 |
-| `.harness-plugins/` | この source repository 自身の作業方針 | 対象外。利用先 repository の設定は利用先が所有する |
-| `scripts/` | Repository 全体の validation 入口 | 対象外。Plugin root 内 `scripts/` とは別物 |
-| `shared/` | 複数 plugin へ複製する共通 source の正本 | 直接は対象外。必要な copy を plugin root へ置く |
-| `tests/` | Repository-level test | 対象外 |
-| `docs/`、`VALIDATION.md` | Marketplace 全体の作例・検証説明 | 対象外 |
-| `.gitignore`、`.git/` | Source 管理規則と Git metadata | 対象外。`.git/` は commit 対象でもない |
+## 内部処理を追加するとき
 
-### 公開Git操作の所有境界
+同じ仕事を完了するための処理なら、パッケージ内へ追加して公開入口から呼ぶ。内部の配布定義を揃え、公開スキル一覧へ機械的に追加しない。別リポジトリが所有する仕事なら、その公開パッケージへ依存する。
 
-**PRを扱うpluginと公開Git操作を実行するpluginの責務は分ける。** pull-request pluginはPRの準備・本文・review手順を所有できるが、commit、push、PR作成、mergeを許す判断や実行は`agent-work-policy`の`prepare.sh`と`control.py`へ委譲する。permission、human gate、commit前検証、PR readinessを一つの正本に置くことで、各pluginが異なる公開規則を複製しない。
+CodexとClaude Codeの配布名・バージョン・sourceを一致させ、変更したリポジトリの検証を実行する。配布内容を変える場合はリリースのバージョンも更新する。READMEだけの修正と、利用者へ届くパッケージの変更は区別する。
 
-この契約はplugin install payload内の`SKILL.md`、`references/operation-contract.md`、`scripts/control.py`で完結する。repository rootの`tests/`はその公開APIをBDD fixtureで検査する開発資産であり、install payloadへ混入させない。
+Git操作の許可・検証・公開はagent-work-policyのprepare.shとcontrol.pyが担当する。他のパッケージへ判断や公開操作を複製しない。
 
-### 新規追加・変更時の判断規則
+## 導入と更新の確認範囲
 
-**配置は「誰が、いつ読むか」で決める。** Plugin install 後の実行に必要なら plugin root、repository の開発・release にだけ必要なら repository rootへ置く。
+具体的なコマンドは各READMEを使う。marketplaceの取得、パッケージの導入、外部依存の導入、新しい会話での入口確認までを一続きで確認する。更新は導入時と同じ設定環境・適用範囲で行う。
 
-1. Plugin の責務と marketplace を決める。
-2. `plugins/skills/<領域>/<plugin>/` または `plugins/playbooks/<領域>/<plugin>/` に leaf root を作る。
-3. Codex と Claude Code の catalogへ同じ plugin名、version、source pathを登録する。
-4. Plugin root の両 manifestへ同じ identity と versionを書く。
-5. 実行時に必要な script・reference・asset・bundled defaultを plugin root 内へ置く。
-6. 外部 plugin はコピーせず、完全修飾した依存として宣言する。
-7. Repository-level validationへ、catalog集合、source path、manifest、shared copy、構文の検査を追加する。
-8. 実インストール後の payload に repository root の開発資産が混入しないことを検査する。
-
-## なぜこうなっているか
-
-**Plugin ごとに leaf root を閉じるのは、インストール時に repository root が実行環境へ届かないためである。** [共通 resolver](https://github.com/nakamori-naoya/write-doc-plugins/blob/main/shared/skill/resolve.sh) は次の制約を明記している。
-
-> インストールで運ばれるのは配布物のディレクトリだけなので、リポジトリ root の共有ファイルは配布先へ届かない。
-
-**この制約に従い、`shared/` の必要部分は各 plugin root へ複製する。** Repository validation は `cmp` などで正本と copy の一致を検査する。Plugin の実行時コードから repository root の `shared/` を相対参照してはならない。
-
-**Runtime ごとの catalog と manifest を並置するのは、同じ plugin を異なる schema へ適合させるためである。** ファイルは統合せず、identity、version、source集合の一致を機械検査する。Runtime 固有の policy や interface は、それぞれの manifest に残す。
-
-**外部依存を物理的に同梱しないことで、plugin の所有境界を維持する。** Playbook は依存先を marketplace名、plugin名、repository方針に応じたversionで解決する。`requires` に書かれた依存は、入口 plugin root の一部ではない。
-
-## 採らなかった選択肢
-
-| 選択肢 | なぜ採らなかったか |
-|---|---|
-| Repository 全体を1つの plugin として扱う | 現在の catalog は43個の leaf rootを別々の install unitとして定義している |
-| Repository root の `shared/` を実行時に直接読む | Install先へ repository root が届かず、plugin 単体で動かない |
-| 外部依存 plugin を入口 plugin へコピーする | Marketplace と plugin の所有境界が崩れ、versionと正本が複数になる |
-| Runtime 別 manifest を1ファイルへ統合する | Codex と Claude Code で必要な schema と metadata が異なる |
-
-## 関連コンセプト
-
-- [Plugin repository のコード地図](plugin-repository-directory-structure.md) — Repository root と plugin root の置き場、責務、構成差を確認する。
-- [Write Doc marketplace README](https://github.com/nakamori-naoya/write-doc-plugins/blob/main/README.md) — Marketplace 登録、plugin install、設定優先順位の実例を確認する。
-- [BDD marketplace の配布境界検査](https://github.com/nakamori-naoya/bdd-discovery-and-formulation-plugins/blob/main/scripts/validate-structure.sh) — Plugin集合と責務境界を検査する実例を確認する。
-
-## その他の情報
-
-**固定参照点では、10 repository の `scripts/validate.sh` がすべて成功した。** 現行検査は marketplace 集合、manifest identity、構文、repositoryごとの追加契約を確認している。
-
-**成功は、実インストール payload と repository 間の完全な構成一致までは保証しない。** Source path の安全性、余剰 directory、root開発物の非混入、全 shared copy の同期は、repositoryにより検査範囲が異なる。統一候補と現状差は、関連するコード地図の「アーキテクチャ上の特徴」にまとめる。
+リポジトリの自動検証が成功しても、利用者の実環境へのインストールや外部サービスとの接続を確認したことにはならない。実行した検証と、未確認の範囲は分けて報告する。
