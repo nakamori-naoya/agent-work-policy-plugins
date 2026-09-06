@@ -5,6 +5,13 @@ set -uo pipefail
 # 入っていると、「解決できないはず」の負例が解決してしまい、緑のまま規則が抜ける。
 # 必要な検査は、自分でその場だけ設定する。
 unset HARNESS_PLUGIN_DEV_ROOTS HARNESS_PLUGIN_CACHE_ROOT
+# **runtimeを開発環境から拾わせない。** resolverはHARNESS_PLUGIN_RUNTIMEが無いと
+# CLAUDE_PLUGIN_ROOT / CODEX_HOME や利用者のinstalled-cacheからruntimeを推測する。
+# 手元にそれらがあると通り、何も入っていないCI runnerでは
+# dependency-runtime-unresolved で落ちる。**検査するruntimeはここで明示する。**
+# 両runtimeを見るprobeは、その場で自分のHARNESS_PLUGIN_RUNTIMEを渡して上書きする。
+unset CLAUDE_PLUGIN_ROOT CODEX_HOME CLAUDE_PLUGIN_CACHE CODEX_PLUGIN_CACHE
+export HARNESS_PLUGIN_RUNTIME=codex
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 python3 "$ROOT/scripts/test-hardening.py" || exit 1
 # **一時領域を正規形へ直さない。** macOS 既定の TMPDIR は /var/folders/... という
