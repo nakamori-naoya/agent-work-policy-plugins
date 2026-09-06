@@ -110,12 +110,13 @@ deep_unknown=$(jq -rn --argjson req "$bundled" --argjson got "$pb" '
 [ -z "$deep_unknown" ] || { echo "[error] 同梱 playbook.yml に無い設定: $deep_unknown" >&2; exit 2; }
 
 # 共通resolverは個別playbookのキーを知らない。各配布物が持つvalidatorへ委譲する。
+# **ただし走らせるのは、依存解決と汎用の依存規則検査（--check-steps）を通した後である。**
+# 固有validatorを先に走らせると、`skill: grill` のような規則違反が
+# 配布物ごとの文言で落ち、汎用の [error:external-dependency-*] に到達しない。
+# 規則は全 repository で同じ診断が出て初めて機械で強制できるので、汎用が先に立つ。
+# 存在検査だけはここで済ませる（無い配布物を依存解決まで進めても得が無い）。
 validator="$PB_ROOT/scripts/validate-config.sh"
 [ -x "$validator" ] || { echo "[error] playbook固有validatorが無い: $validator" >&2; exit 2; }
-pb_file=$(mktemp "${TMPDIR:-/tmp}/${name}.playbook.XXXXXX") || exit 2
-trap 'rm -f "$pb_file"' EXIT
-printf '%s\n' "$pb" > "$pb_file"
-bash "$validator" "$pb_file" || exit 2
 
 n=$(jq '.steps | length' <<<"$pb")
 [ "$n" -gt 0 ] || { echo "[error] steps が空: ${name}" >&2; exit 2; }
@@ -200,6 +201,15 @@ out=$(jq -cn --argjson pb "$pb" --argjson d "$deps" --arg root "$root" --arg pr 
                 input_file:(if $ifile=="" then null else $ifile end)}}
    | if $input==null then . else .input=$input end')
 printf '%s\n' "$out" | python3 "$dependency_resolver" --check-steps || exit 2
+
+# 汎用規則を通ってから、配布物固有のschemaを検査する。
+pb_file=$(mktemp "${TMPDIR:-/tmp}/${name}.playbook.XXXXXX") || exit 2
+trap 'rm -f "$pb_file"' EXIT
+printf '%s\n' "$pb" > "$pb_file"
+bash "$validator" "$pb_file" || exit 2
+
+# 静的に解けた steps[].input を input_resolved として併記する（参照形の input は残す）。
+out=$(printf '%s\n' "$out" | python3 "$dependency_resolver" --resolve-inputs) || exit 2
 if [ "$explain" = "1" ]; then
   printf '%s\n' "$out" | python3 "$dependency_resolver" --explain-config >&2 || exit 2
   echo "# 選択した設定: ${source} (${selected})" >&2

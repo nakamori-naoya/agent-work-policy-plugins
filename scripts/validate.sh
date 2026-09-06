@@ -471,7 +471,9 @@ cpb="$consumer/plugins/playbooks/probe/probe"
 mkdir -p "$cpb/scripts" "$cpb/.claude-plugin" "$cpb/.codex-plugin" \
   "$consumer/plugins/.claude-plugin" "$consumer/plugins/.codex-plugin"
 git -C "$consumer" init -q
-cache="$cpb/.harness-plugin-test-cache/agent-work-policy/agent-work-policy/2.0.0"
+# **版はmanifestから読む。** ここに版を直書きすると、release後にfixtureが実体から乖離する。
+package_version=$(jq -r '.version' "$ROOT/plugins/.claude-plugin/plugin.json")
+cache="$cpb/.harness-plugin-test-cache/agent-work-policy/agent-work-policy/${package_version}"
 mkdir -p "$(dirname "$cache")"
 cp -R "$ROOT/plugins" "$cache"
 for runtime in claude codex; do

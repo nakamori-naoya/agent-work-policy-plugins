@@ -9,6 +9,8 @@
 | kind | `playbook` |
 | playbook 名 | `agent-work-policy` |
 
+**束縛と `implements` は対になっている。** 利用者が書く `dependencies.yml` の `bindings` は、契約 ID `agent-work-policy/agent-work-policy` に対して差し替え先を `{plugin, marketplace}` で指すだけであり、path も version も書けない。差し替え先の側は自分の `plugin.json` の `metadata.harness.implements[]` に `{id: agent-work-policy/agent-work-policy, version: 1, kind: playbook, playbook: <入口 playbook 名>, actions: [<実装する action>]}` を宣言する。resolver はこの 2 つを突き合わせ、宣言の無い plugin への束縛を `[error:binding-not-implemented]` で止める。消費側が `input.action` で要求した action が `actions` に無ければ `[error:binding-capability-unsupported]` で止まる。**どちらの側でも消費側の `requires` は書き換えない。** top-level が `version: 1` と `bindings` だけであること、3 層の置き場所、優先順位は README「実行契約と保守」にある。
+
 ## 1. 入口
 
 消費側の `playbook.yml` からは `steps[].playbook: agent-work-policy` で呼ぶ。解決結果 `deps.<論理名>` から参照してよいのは次の 4 点だけである。

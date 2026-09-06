@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "plugin": "agent-work-policy",
+  "version": "2.0.1",
+  "created_at": "2026-09-06T23:29:29.449032+00:00",
+  "notes": "共通実行基盤を2.4.2へ更新する。外部依存を規則どおりに使っていない設定は、配布物ごとの検査より先に共通の診断コードで止める。runtimeの判定は、解決した配布物が置かれているinstalled cacheから決め、shellに他runtimeの環境変数があるだけで取り違えないようにする。解決済み設定の外部playbook工程には、参照形の入力に加えて静的に解けた値をinput_resolvedとして併記する。READMEの「実行契約と保守」に、利用者が書くdependencies.ymlの書式例（top-levelはversion: 1とbindingsだけ、契約IDに{plugin, marketplace}を束縛、pathとversionは書けない、3層の置き場所と優先順位）と、prepare.shが--explainを引数に取らずexplainは常にstderrへ出ることを書いた。CONTRACT.mdに、差し替え先の宣言と利用者の束縛の対応を書いた。",
+  "breaking": "無し。契約ID、契約版、公開入口、入力schema、出力schemaは変えない。規則違反の設定に返す診断コードが配布物固有の文言から共通のコードへ変わるが、拒否する条件とexit 2は同じである。解決済み設定にinput_resolvedが増えるが、既存のinputは参照形のまま残る。",
+  "migration": "無し。再インストールでpatch版に入れ替わる。設定ファイル、dependencies.yml、消費側のplaybook.ymlはそのまま使える。規則違反の設定を持っている場合だけ、出るメッセージが共通の診断コードへ変わる。",
+  "checks": {
+    "codex": {
+      "status": "manifest-and-contract-tests-passed",
+      "native-client-installation": "not-executed",
+      "evidence": "HARNESS_PLUGIN_RUNTIME=codex /bin/bash scripts/validate.sh: exit 0（bash 3.2、配布構造・公開manifest・解決・負の試験・消費側契約lint）"
+    },
+    "claude": {
+      "status": "manifest-and-contract-tests-passed",
+      "native-client-installation": "not-executed",
+      "evidence": "HARNESS_PLUGIN_RUNTIME=claude /bin/bash scripts/validate.sh: exit 0（bash 3.2、配布構造・公開manifest・解決・負の試験・消費側契約lint）"
+    },
+    "real-distribution": "fixtureだけで緑にせず、兄弟checkoutの実配布物を解決させた",
+    "consumer-contract-lint": "scripts/lint-consumer-contract.py: codex / claude 両runtimeで 0 finding",
+    "runtime-sync": "scripts/sync-runtime.py --check --source <正本>: version 2.4.2、changed 空",
+    "regression": "scripts/test-hardening.py: 全緑（汎用規則の先行診断、runtime判定、input_resolvedの負の試験を追加）",
+    "post-version-validation": "HARNESS_PLUGIN_RUNTIME=claude / codex の /bin/bash scripts/validate.sh: passed (exit 0)"
+  },
+  "files": [
+    ".agents/plugins/marketplace.json",
+    "plugins/.codex-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "plugins/.claude-plugin/plugin.json"
+  ]
+}
