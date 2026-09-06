@@ -39,13 +39,13 @@ GraphQLを含むGitHub JSON応答はtop-level `errors`が1件でもあれば失�
 scriptが`waiting_for_human`を返した場合だけ、対象を提示して承認を求める。承認を得ていない呼出しへ
 `--approved`を付けない。`forbidden`、`not_ready`、`verification_failed`を成功として扱わない。
 
-## 下流plugin向けCLI契約
+## `control.py`の呼び出し契約
 
-このpluginが公開Git操作の唯一の所有者である。たとえばpull-request pluginは、設定を解決して`control.py`を呼ぶだけであり、permission、human gate、検証、readiness、`git` / `gh`の公開操作を再実装しない。
+このpackageが公開Git操作の唯一の所有者である。`control.py`を呼んでよいのはこのpackage内の`apply-work-policy` skillだけであり、外部pluginはこのpackageの公開playbookを通してしか操作を要求できない。permission、human gate、検証、readiness、`git` / `gh`の公開操作をこのpackageの外で再実装しない。
 
 ### 入力
 
-1. `bash "$POLICY_ROOT/scripts/prepare.sh" "$TARGET_REPO"` のstdoutで得た、空でない解決済みYAML pathを`--config`へ渡す。`prepare.sh`失敗時はexit `2`として停止する。
+1. `bash "${PLUGIN_ROOT}/scripts/prepare.sh" "<対象repository>"` のstdoutで得た、空でない解決済みYAML pathを`--config`へ渡す。`prepare.sh`失敗時はexit `2`として停止する。
 2. `--repo`が必要なcommandには公開対象repositoryを渡す。`permission`と`gate`は`--repo`を取らない。
 3. actionは`commit`、`push`、`pull_request`、`merge`だけである。`ready-for-review`は`pull_request` actionを再利用する。各公開commandの追加入力は以下のとおり。
 
@@ -61,15 +61,36 @@ scriptが`waiting_for_human`を返した場合だけ、対象を提示して承�
 
 ### 結果
 
-`argparse`がcommandと必須引数を受理した呼出しでは、stdoutはJSON objectである。`argparse`による入力不備はusageをstderrへ出してexit `2`で終わるため、stdout JSONの保証外である。下流pluginはJSONが返った場合に最低限`status`を読み、成功時だけ後続工程へ進む。成功JSONは`status`に`allowed`、`approved`、`ready`、`committed`、`pushed`、`created`、`merged`、`cleaned`のいずれかを持つ。`ready-for-review`の`ready`には`changed`があり、下書きを解除したときだけ`true`である。
+`argparse`がcommandと必須引数を受理した呼出しでは、stdoutはJSON objectである。`argparse`による入力不備はusageをstderrへ出してexit `2`で終わるため、stdout JSONの保証外である。呼び出し元skillはJSONが返った場合に最低限`status`を読み、成功時だけ後続工程へ進む。成功JSONは`status`に`allowed`、`approved`、`ready`、`committed`、`pushed`、`created`、`merged`、`cleaned`のいずれかを持つ。`ready-for-review`の`ready`には`changed`があり、下書きを解除したときだけ`true`である。
 
-| exit | 意味 | 下流pluginの扱い |
+| exit | 意味 | 呼び出し元skillの扱い |
 |---:|---|---|
 | 0 | 判定または操作が成功した | stdout JSONの`status`を記録し、成功した判定または操作だけを後続へ渡す |
 | 2 | 引数、設定、repository、依存commandが不正 | 公開操作を行わず停止する |
 | 3 | permission拒否、承認待ち、readiness不足、検証失敗、操作失敗 | `forbidden`、`waiting_for_human`、`not_ready`、`verification_failed`、`failed`、`merge_failed`、`merged_cleanup_failed`、`no_changes`などを成功へ変換せず停止・報告する |
 | 4 | base更新後にPR反映を確認できないpartial success | `merge_partial`、`base_updated:true`、実際のbase SHAを返す。mergeを再実行せず状態確認後に`cleanup`だけを再開する |
 
-`waiting_for_human`だけは承認待ちを示すJSONである。人間の承認を取得していない下流pluginは`--approved`を付けない。`merge-readiness`が`not_ready`の間は、下流pluginもhuman gateを提示しない。
+`waiting_for_human`だけは承認待ちを示すJSONである。人間の承認を取得していない呼び出し元skillは`--approved`を付けない。`merge-readiness`が`not_ready`の間は、呼び出し元skillもhuman gateを提示しない。
 実行していない操作、取得できなかったPR状態、失敗したbranch・worktree削除を成功として報告しない。merge後の片付けだけが失敗した場合は`merged_cleanup_failed`として、merge済みであることと残った対象を同時に返す。
 解決済み設定の`repo_root`と`--repo`のcanonical pathは全repository操作で一致必須である。GitHub対象repository、設定remote、PR head repositoryも一致しなければ公開操作を行わない。
+
+### 呼び出し元へ返す語彙
+
+`control.py`のJSONと`exit`は**このpackageの内部表現**である。公開playbookへ返すときは次へ写す。内部の`status`名と`exit`をそのまま外へ出さない。
+
+| control.pyの結果 | 公開status | 公開gate_state | 公開reason |
+|---|---|---|---|
+| exit 0（`allowed` / `approved` / `ready` / `committed` / `pushed` / `created` / `merged` / `cleaned`） | `completed` | `allowed` | — |
+| `waiting_for_human` | `waiting_for_human` | `waiting_for_human` | — |
+| `forbidden` | `failed` | `denied` | `permission_denied` |
+| `not_ready`（`merge-readiness`の問い合わせ） | `completed` | `allowed` | — |
+| `not_ready`（`merge`の実行要求） | `failed` | `allowed` | `not_ready` |
+| `verification_failed` | `failed` | `allowed` | `verification_failed` |
+| `no_changes` / `no_staged_changes` | `failed` | `allowed` | `no_changes` |
+| `merge_partial` | `failed` | `allowed` | `merge_partial` |
+| `merge_failed` | `failed` | `allowed` | `merge_failed` |
+| `merged_cleanup_failed` | `failed` | `allowed` | `cleanup_failed` |
+| exit 2（引数・設定・repositoryが不正） | `failed` | `denied` | `invalid_input` |
+| 上記以外の`failed` | `failed` | `allowed` | `error` |
+
+承認待ちのときは、`context`（branch、paths、検証結果、readiness）を承認対象として返す。全文はfileへ書き、その絶対pathを添える。

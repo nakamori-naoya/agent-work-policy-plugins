@@ -1,6 +1,6 @@
 # Agent Work Policy
 
-repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを解決するClaude Code/Codex両対応marketplaceである。
+repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを解決するClaude Code/Codex両対応marketplaceである。公開するインストール対象は、Playbook package `agent-work-policy` 1件だけである。
 
 ## こんなときに使う
 
@@ -31,6 +31,19 @@ repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを�
 ```text
 検証とmerge readinessを確認し、policyが許す場合だけPRをmergeして。
 ```
+
+## 公開面
+
+利用者が呼ぶ入口は skill `work-with-policy` の1つ、別pluginから使う入口は公開playbook `agent-work-policy` の1つである。
+
+| 公開面 | 実体 |
+|---|---|
+| 利用者導線の skill | `work-with-policy`（[入口SKILL](plugins/playbooks/automation/agent-work-policy/SKILL.md)） |
+| 公開 playbook | `agent-work-policy`（[playbook.yml](plugins/playbooks/automation/agent-work-policy/playbook.yml)） |
+| 公開契約 | [CONTRACT.md](plugins/playbooks/automation/agent-work-policy/CONTRACT.md)。契約ID `agent-work-policy/agent-work-policy`、版 1 |
+| 内部 plugin | `work-policy-control`。**外部から直接依存できない** |
+
+別pluginからこのpackageを使うときは、`steps[].playbook: agent-work-policy` だけで呼ぶ。内部の skill、script、references、設定 schema、exit code へは依存できない。頼ってよい入力・出力・保証は [CONTRACT.md](plugins/playbooks/automation/agent-work-policy/CONTRACT.md) が正本である。
 
 ## インストール
 
@@ -113,7 +126,7 @@ playbookの静的設定は、scope、repository、personal、同梱 `playbook.ym
 
 skillでは、同梱設定の `prompt_parameters` に宣言されたpathだけ、依頼で明示された値を `--override=<path>=<value>` として最終上書きできる。宣言されていないpathを任意に上書きすることはできない。
 
-repository共通のpolicyは `<repo>/.harness-plugins/agent-work-policy.config.yml`、commitしない端末固有値は `<repo>/.harness-plugins/agent-work-policy.local.yml` に置く。
+repository共通のpolicyは `<repo>/.harness-plugins/work-policy-control.config.yml`、commitしない端末固有値は `<repo>/.harness-plugins/work-policy-control.local.yml` に置く。playbookの段取り設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` であり、policy設定とは別のファイルである。
 
 ## 検証
 
@@ -134,6 +147,18 @@ bash scripts/validate.sh
 [意味評価fixture](evals/scenarios.json)を[評価runner](scripts/evaluate-skills.py)へ渡し、異なる生成modelとjudge modelを指定する。モデル名、実model利用、適用設定、入力、出力、SKILL hash、判定の引用と理由を保存する。これはツール無効の次応答を対象とした代表caseの意味評価であり、実ツールを使った全工程E2Eや全行動の保証ではない。保存・CLI・再開の検証は[振る舞い回帰試験](scripts/test-hardening.py)と既存validateが担う。実モデル未実行のfixtureを合格扱いにしない。
 
 ### 破壊的変更の移行
+
+**配布形をskill packageからPlaybook packageへ変えた。** marketplaceの`source`が`./plugins/skills/automation/agent-work-policy`から`./plugins`へ変わるため、**再インストールが要る**。
+
+**policy設定ファイルの名前が変わった。** policyを実行する内部pluginを`work-policy-control`へ改名したので、`<repo>/.harness-plugins/agent-work-policy.config.yml`は`<repo>/.harness-plugins/work-policy-control.config.yml`へ、`~/.config/harness-plugins/agent-work-policy.config.yml`は`~/.config/harness-plugins/work-policy-control.config.yml`へ改名する。`agent-work-policy.config.yml`は公開playbookの段取り設定として解釈されるため、旧名のまま残すと解決が停止する。
+
+**別pluginからの呼び出し方が変わった。** `control.py` / `prepare.sh` / `run-config.py` を外部から直接実行する経路は廃止した。消費側は`steps[].playbook: agent-work-policy`で呼び、[CONTRACT.md](plugins/playbooks/automation/agent-work-policy/CONTRACT.md)の入力・出力だけに依存する。
+
+**束縛lockのschemaに `bindings` が増えた。** 実行中のrunが持っている旧schemaのlockは非互換なので、`--bindings=<lock>` へ渡さない。**runを跨いでlockを使い回さず、入口が作り直す。**
+
+**外部依存の入口参照は `${.deps.<論理名>.entry}` になった。** `${.deps.<論理名>.skills.<名前>}` はresolverとlintが`external-dependency-path`で落とす。`entry_skill`は表示用で、その名前で分岐しない。
+
+**read-onlyのaction `inspect` を足した。** 現況（`workspace`と作業branch・clean・既存PR番号）を返すだけの照会で、既存branchでもdirtyでも止まらない。**状況を知るために`plan`を呼んでいた消費側は`inspect`へ切り替える。**
 
 重複した薄いSKILL入口を廃止した。利用者は公開manifestに列挙された入口を使い、旧入口pathを保存した独自ランチャーは新しい宣言へ切り替える。設定のEXIT trapは廃止し、返されたrun pathを明示して完了・停止時にcleanupする。旧式の一時pathやshell変数だけを再利用しない。
 

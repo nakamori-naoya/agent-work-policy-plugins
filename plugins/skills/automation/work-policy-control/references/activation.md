@@ -9,4 +9,4 @@ repositoryのすべての変更作業で使う場合は、正式な `AGENTS.md` 
 agent-work-policyの work-with-policy skillを呼び、解決された設定とgateに従う。
 ```
 
-特定の段取りだけへ適用する場合は、その段取りの先頭と公開操作の直前にこのskillまたは同梱scriptを明示的に組み込む。どちらにも書かれていない作業へ適用されたとはみなさない。
+特定の段取りだけへ適用する場合は、その段取りの先頭と公開操作の直前に公開入口を明示的に組み込む。別pluginの段取りからは、公開playbook `agent-work-policy` を `playbook:` 工程として組み込む（このpackageのscriptを直接実行しない）。どちらにも書かれていない作業へ適用されたとはみなさない。

@@ -1,6 +1,6 @@
-# agent-work-policy
+# work-policy-control
 
-AIエージェントのGit作業を、repositoryごとの設定に従って開始・公開する。worktreeかbranchか、各操作を許すか、人間の承認をいつ求めるか、PRをいつmerge可能とみなすかを分けて扱う。
+`agent-work-policy` packageの内部pluginである。AIエージェントのGit作業を、repositoryごとの設定に従って開始・公開する。**この plugin を別 repository から直接依存先に指定しない。** 外部からの入口は package の公開 playbook `agent-work-policy` だけである。worktreeかbranchか、各操作を許すか、人間の承認をいつ求めるか、PRをいつmerge可能とみなすかを分けて扱う。
 
 ## できること
 
@@ -16,7 +16,7 @@ AIエージェントのGit作業を、repositoryごとの設定に従って開�
 
 ## 設定
 
-repository設定は `<repo>/.harness-plugins/agent-work-policy.config.yml`。scopeが渡されたときだけscopeを先頭に、local、repository、personal、同梱既定の順で最上位の1ファイルだけを選び、マージしない。
+repository設定は `<repo>/.harness-plugins/work-policy-control.config.yml`。scopeが渡されたときだけscopeを先頭に、local、repository、personal、同梱既定の順で最上位の1ファイルだけを選び、マージしない。
 
 ```yaml
 version: 1
@@ -69,21 +69,13 @@ local・PR・remoteのhead SHA、PR・remoteのbase SHA、祖先関係、branch 
 
 ## 適用範囲
 
-インストールしただけでは、他skillや素のgit操作を横取りしない。すべての変更作業へ適用する場合は、repositoryの `AGENTS.md` / `CLAUDE.md` から `work-with-policy` の利用を必須にする。
+インストールしただけでは、他skillや素のgit操作を横取りしない。すべての変更作業へ適用する場合は、repositoryの `AGENTS.md` / `CLAUDE.md` から公開入口 `work-with-policy` の利用を必須にする。
 
-## 他pluginへの公開操作API
+## 外部pluginからの呼ばれ方
 
-下流pluginは、対象repositoryの解決済み設定を`control.py`へ渡して公開操作を呼び出す。
+外部pluginがこのpackageへ操作を要求する経路は、公開playbook `agent-work-policy` だけである。外部pluginがこのplugin rootからpathを組み立てたり、`control.py` や `prepare.sh` を直接実行したりすることはできない。公開する入力・出力・保証は、公開playbookの[契約](../../../playbooks/automation/agent-work-policy/CONTRACT.md)が正本である。
 
-```bash
-CFG_FILE=$(bash "$POLICY_ROOT/scripts/prepare.sh" "$TARGET_REPO") || exit 2
-python3 "$POLICY_ROOT/scripts/control.py" permission --config "$CFG_FILE" --action pull_request
-python3 "$POLICY_ROOT/scripts/control.py" pull-request --config "$CFG_FILE" --repo "$TARGET_REPO" \
-  --title '<title>' --body-file '<body-file>'
-python3 "$POLICY_ROOT/scripts/control.py" ready-for-review --config "$CFG_FILE" --repo "$TARGET_REPO" --pr <number>
-```
-
-入力、順序、stdout、exit、境界時の扱いは[公開操作契約](references/operation-contract.md#下流plugin向けcli契約)を正本にする。
+`control.py`の呼び出し規約は、このpackage内の`apply-work-policy` skillだけに適用される内部契約であり、[公開操作契約](references/operation-contract.md)にある。
 
 PR作成時の設定がdraftであれば、内部レビュー完了後かつ`merge-readiness`の前に`ready-for-review`を呼ぶ。これは既存PRのレビュー受付状態を変える同じ`pull_request` permission内の遷移であり、新しい公開先やmergeを生まないため追加gateを持たない。すでに公開済みのPRは外部変更なしで成功する。
 
@@ -91,7 +83,7 @@ PR作成時の設定がdraftであれば、内部レビュー完了後かつ`mer
 
 | 文書 | 責務 |
 |---|---|
-| `SKILL.md` | 設定解決からworkspace、変更、公開、merge、報告までの順序 |
+| `skills/apply-work-policy/SKILL.md` | 設定解決からworkspace、変更、公開、merge、報告までの順序 |
 | `references/settings.md` | 全設定値の意味と作業への反映箇所 |
 | `references/operation-contract.md` | permission、gate、readiness、exit contract |
 | `references/activation.md` | repository全体へpolicyを有効化する方法 |

@@ -754,6 +754,77 @@ def merge_readiness(cfg, root, pr_number, info=None):
     }
 
 
+def existing_pull_request(root, branch):
+    """作業branchへ開いているPRを1件だけ引く。**引けなくても止めない。**
+
+    inspectは照会であり、GitHubへ届かない・ghが無い・認証が切れているといった
+    事情で停止してはならない。取れなければ「分からない（None）」を返す。
+    """
+    if not branch or not shutil.which("gh"):
+        return None
+    proc = command([
+        "gh", "pr", "list", "--head", branch, "--state", "open",
+        "--json", "number,url,isDraft", "--limit", "1",
+    ], cwd=root)
+    if proc.returncode:
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+    head = data[0]
+    number = head.get("number")
+    if not isinstance(number, int):
+        return None
+    return {"number": number, "url": head.get("url"), "draft": bool(head.get("isDraft"))}
+
+
+def branch_worktree(root, branch):
+    """branchが副worktreeへcheckoutされていればそのpathを返す。無ければNone。"""
+    if not branch:
+        return None
+    for entry in worktree_entries(root):
+        path = entry.get("worktree")
+        if not path or entry.get("branch") != f"refs/heads/{branch}":
+            continue
+        if str(Path(path).resolve()) == root:
+            continue
+        return str(Path(path).resolve())
+    return None
+
+
+def do_inspect(cfg, args):
+    """read-onlyの照会。**既存branchでも、汚れたworking treeでも止まらない。**
+
+    planは「新しい作業を始めてよいか」の判定なので、既存branchやdirtyで停止する。
+    inspectは「いま何がどうなっているか」を返すだけなので、同じ理由で止めない。
+    permissionもgateも持たない（変更しないため）。
+    """
+    root = bound_repo_root(cfg, args.repo)
+    use_worktree = cfg["workspace"]["use_worktree"]
+    base = cfg["workspace"]["base_branch"]
+    proc = git(root, "branch", "--show-current")
+    branch = proc.stdout.strip() if proc.returncode == 0 else ""
+    dirty = dirty_changes(root)
+    emit({
+        "status": "inspected",
+        "mode": "worktree" if use_worktree else "branch",
+        "repo_root": root,
+        "base_branch": base,
+        "base_branch_exists": git(root, "show-ref", "--verify", "--quiet",
+                                  f"refs/heads/{base}").returncode == 0,
+        "remote": cfg["git"]["remote"],
+        "draft": bool(cfg["pull_request"]["draft"]),
+        "branch": branch or None,
+        "worktree": branch_worktree(root, branch) if use_worktree else None,
+        "clean": not dirty,
+        "changes": dirty,
+        "pull_request": existing_pull_request(root, branch),
+    }, 0)
+
+
 def do_commit(cfg, args):
     root = bound_repo_root(cfg, args.repo)
     permission(cfg, "commit")
@@ -1182,7 +1253,7 @@ def do_cleanup(cfg, args):
 def build_parser():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("preflight", "plan", "start", "permission", "gate", "commit", "push", "pull-request", "ready-for-review", "merge-readiness", "merge", "cleanup"):
+    for name in ("preflight", "inspect", "plan", "start", "permission", "gate", "commit", "push", "pull-request", "ready-for-review", "merge-readiness", "merge", "cleanup"):
         item = sub.add_parser(name)
         item.add_argument("--config", required=True)
         if name not in {"permission", "gate"}:
@@ -1220,6 +1291,8 @@ def main():
             },
             0,
         )
+    if args.command == "inspect":
+        do_inspect(cfg, args)
     if args.command == "plan":
         emit(workspace_plan(cfg, args.repo, args.branch))
     if args.command == "start":
