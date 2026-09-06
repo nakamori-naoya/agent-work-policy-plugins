@@ -23,7 +23,7 @@ else
   exit 2
 fi
 
-USAGE="usage: prepare.sh --root-only | [repo] [--scope=<dir>] [--override=<path>=<value> ...]"
+USAGE="usage: prepare.sh --root-only | [repo] [--scope=<dir>] [--bindings=<lock|none>] [--input=<abs>] [--override=<path>=<value> ...]"
 if [ "${1:-}" = "--root-only" ]; then
   [ "$#" -eq 1 ] || { echo "$USAGE" >&2; exit 2; }
   printf '%s\n' "$PLUGIN_ROOT"
@@ -34,10 +34,12 @@ fi
 # scope設定はそれを渡した呼び出しの中でしか読まれない。
 # overrides は配列で持つ。空配列を set -u 下で展開すると bash 3.2 で
 # unbound variable になるため、展開は必ず ${overrides[@]+"${overrides[@]}"} の形にする。
-repo=""; scope_arg=""; overrides=()
+repo=""; scope_arg=""; bindings_arg=""; input_arg=""; overrides=()
 for a in "$@"; do
   case "$a" in
     --scope=*) scope_arg="$a" ;;
+    --bindings=*) bindings_arg="$a" ;;
+    --input=*) input_arg="$a" ;;
     --override=*) overrides+=("$a") ;;
     -*) echo "$USAGE" >&2; exit 2 ;;
     *) [ -z "$repo" ] || { echo "$USAGE" >&2; exit 2; }; repo="$a" ;;
@@ -47,5 +49,15 @@ repo="${repo:-$PWD}"
 [ -d "$repo" ] || { echo "[error] repo directoryが無い: $repo" >&2; exit 2; }
 [ -x "$PLUGIN_ROOT/scripts/resolve.sh" ] || { echo "[error] resolverが無い: $PLUGIN_ROOT/scripts/resolve.sh" >&2; exit 2; }
 
+# playbook経路にだけ束縛と入力を渡す。skill側 resolve.sh はこれらを知らず、
+# 未知optionで exit 2 するので、素通しさせるとskillのprepare.shで落ちる。
+forward=()
+if [ "$kind" = "playbook" ]; then
+  [ -z "$bindings_arg" ] || forward+=("$bindings_arg")
+  [ -z "$input_arg" ] || forward+=("$input_arg")
+elif [ -n "$bindings_arg$input_arg" ]; then
+  echo "[error] skillは--bindings/--inputを受け取らない" >&2; exit 2
+fi
+
 exec python3 "$SCRIPT_DIR/run-config.py" create --root "$PLUGIN_ROOT" -- "$repo" --explain ${scope_arg:+"$scope_arg"} \
-  ${overrides[@]+"${overrides[@]}"}
+  ${forward[@]+"${forward[@]}"} ${overrides[@]+"${overrides[@]}"}

@@ -1,0 +1,25 @@
+{
+  "name": "agent-work-policy",
+  "version": "2.0.0",
+  "description": "Git作業の1操作を、permissionとhuman gateに従って実行する公開Playbook",
+  "skills": "./",
+  "author": {
+    "name": "NaoyaNakamori"
+  },
+  "interface": {
+    "displayName": "Agent Work Policy",
+    "shortDescription": "Git作業の1操作を、permissionとhuman gateに従って実行する",
+    "longDescription": "worktreeまたはbranchでの作業開始、検証、commit、push、PR作成、公開、merge、片付けを、repositoryごとのpermissionとhuman gateに従って1操作ずつ実行する",
+    "developerName": "NaoyaNakamori",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Skills"
+    ],
+    "defaultPrompt": "agent-work-policyを使ってこの作業を進めてください。"
+  },
+  "metadata": {
+    "harness": {
+      "contractVersion": 1
+    }
+  }
+}

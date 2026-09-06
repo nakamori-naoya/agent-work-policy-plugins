@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "plugin": "agent-work-policy",
+  "version": "2.0.0",
+  "created_at": "2026-09-06T17:58:53.806271+00:00",
+  "notes": "外部から見える面を公開playbook agent-work-policy 1本に閉じ、契約IDagent-work-policy/agent-work-policy v1をCONTRACT.mdで正本化する。1呼び出し1actionに固定し、workspaceと理由語彙を出力で返す。",
+  "breaking": "配布形をskill packageからPlaybook packageへ変え、marketplaceのsourceを./plugins/skills/automation/agent-work-policyから./pluginsへ移した。内部pluginをagent-work-policyからwork-policy-controlへ、入口skillをwork-with-policyからapply-work-policyへ改名したため、利用者の設定ファイル名も<repo>/.harness-plugins/agent-work-policy.config.ymlからwork-policy-control.config.ymlへ、~/.config/harness-plugins/でも同様に変わる。control.py/prepare.sh/run-config.pyを消費側から直接実行する経路を廃止した。1呼び出し1actionとし、actionはplan/start/commit/push/pull-request/ready-for-review/merge-readiness/merge/cleanupの9種に固定した。approvedはgateのある4action(commit/push/pull-request/merge)にだけ書け、他actionへ添えると未知キーでexit 2になる。出力にworkspace(base_branch/remote/draft/branch/worktree)を常に返し、消費側が提供側の設定ファイル・設定キーを読むことを禁止した。reasonの語彙をpermission_denied/not_ready/verification_failed/no_changes/invalid_input/merge_partial/merge_failed/cleanup_failed/errorに固定した。検証専用のactionは持たない。validate-marketplaces.shとtests/marketplace-contract.shを廃止し、validate-marketplace.shとtest-marketplace-validation.shへ移した。束縛lockのschemaにbindingsが増えたため旧schemaのlockは非互換である。外部依存の入口参照を${.deps.<論理名>.entry}に限定した。",
+  "migration": "sourceが./pluginsへ変わるので再インストールする。<repo>/.harness-plugins/agent-work-policy.config.ymlと~/.config/harness-plugins/agent-work-policy.config.ymlをwork-policy-control.config.ymlへ改名する。旧名のまま残すとagent-work-policy.config.ymlが公開playbookの段取り設定として解釈され解決が停止する。消費側はcontrol.pyなどの直接実行をやめ、steps[].playbook: agent-work-policyで呼びCONTRACT.mdの入力・出力だけに依存する。1回の呼び出しに2つ以上のactionを混ぜず、承認が要る操作は実際に承認を得たときだけ同じactionをapproved付きで呼び直す。permission拒否を承認質問へ変えない。現況の照会はplanではなくinspectを使う。作業branchやremoteは出力のworkspaceから読み、提供側の設定ファイルを読まない。依存参照は${.deps.<論理名>.entry}へ書き換え、旧schemaのlockは使い回さない。",
+  "checks": {
+    "codex": {
+      "status": "manifest-and-contract-tests-passed",
+      "native-client-installation": "not-executed",
+      "evidence": "HARNESS_PLUGIN_RUNTIME=codex を含む bash scripts/validate.sh: 配布構造・公開manifest・解決・負の試験・消費側契約lintを検査"
+    },
+    "claude": {
+      "status": "manifest-and-contract-tests-passed",
+      "native-client-installation": "not-executed",
+      "evidence": "HARNESS_PLUGIN_RUNTIME=claude を含む bash scripts/validate.sh: 配布構造・公開manifest・解決・負の試験・消費側契約lintを検査"
+    },
+    "real-distribution": "fixtureだけで緑にせず、兄弟checkoutの実配布物 plugins/ を installed-cache へ写して解決させた",
+    "consumer-contract-lint": "scripts/lint-consumer-contract.py: codex / claude 両runtimeで 0 finding",
+    "binding": "契約IDと版で束縛し、bindings snapshot を持つ lock を入口が作り直すところまで通した",
+    "post-version-validation": "bash scripts/validate.sh: 62 passed, 0 failed"
+  },
+  "files": [
+    ".agents/plugins/marketplace.json",
+    "plugins/.codex-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "plugins/.claude-plugin/plugin.json"
+  ]
+}

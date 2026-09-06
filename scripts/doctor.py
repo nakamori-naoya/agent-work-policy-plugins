@@ -87,10 +87,44 @@ def main():
         except (OSError, ValueError, KeyError, IndexError, StopIteration) as exc:
             checks.append({'check': runtime + '-public-skills', 'ok': False, 'detail': str(exc), 'remedy': '公開manifestのskillsとSKILL.mdを修復する'})
     if not a.distribution_only:
+        bindings = {'check': 'dependency-bindings', 'ok': True, 'entries': [], 'unused_bindings': [], 'remedy': ''}
+        used = set()
+        declared = set()
         for resolver in sorted(root.glob('plugins/**/scripts/resolve.sh')):
             result = run('resolve:' + str(resolver.relative_to(root)), ['bash', str(resolver), a.repo, '--explain'])
-            if result:
-                checks[-1]['resolution_sources'] = [line for line in result.stderr.splitlines() if '設定:' in line or 'scope:' in line]
+            if not result:
+                bindings['ok'] = False
+                continue
+            lines = result.stderr.splitlines()
+            # 「依存:」節と「束縛:」節を捨てない。分類と束縛は診断の主目的である。
+            checks[-1]['resolution_sources'] = [line for line in lines if '設定:' in line or 'scope:' in line]
+            checks[-1]['dependencies'] = [line.strip() for line in lines if line.startswith('  [外部]') or line.startswith('  [内部]')]
+            checks[-1]['bindings'] = [line.strip() for line in lines if line.startswith('# 束縛:') or line.strip().startswith('lock:') or ' → 採用 ' in line]
+            entry = {'playbook': str(resolver.relative_to(root)), 'layer': None, 'file': None, 'lock': None, 'resolved': []}
+            for line in lines:
+                if line.startswith('# 束縛: '):
+                    layer, _, origin = line[len('# 束縛: '):].partition(' (')
+                    entry['layer'] = layer.strip()
+                    entry['file'] = origin.rstrip(')').strip() or None
+                elif line.strip().startswith('lock: '):
+                    entry['lock'] = line.strip()[len('lock: '):]
+                elif ' → 採用 ' in line:
+                    contract = line.strip().split(' : ', 1)[0].strip()
+                    entry['resolved'].append(line.strip())
+                    used.add(contract)
+            if entry['file'] and entry['file'] != '無し':
+                try:
+                    catalog = subprocess.run(['yq', '-o=json', '-I=0', '.bindings // {}', entry['file']], text=True, capture_output=True, timeout=30)
+                    if not catalog.returncode:
+                        declared |= set(json.loads(catalog.stdout))
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass
+            bindings['entries'].append(entry)
+        # 未使用束縛は resolve では警告しない。全依存を辿れる doctor だけが報告する。
+        bindings['unused_bindings'] = sorted(declared - used)
+        if bindings['unused_bindings']:
+            bindings['remedy'] = 'dependencies.ymlに、どの実行でも使われていない束縛がある'
+        checks.append(bindings)
     print(json.dumps({'schema': 1, 'mode': 'distribution-only' if a.distribution_only else 'full', 'read_only': True, 'checks': checks}, ensure_ascii=False, indent=2))
     return 0 if checks and all(c['ok'] for c in checks) else 1
 

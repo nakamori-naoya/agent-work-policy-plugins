@@ -1,0 +1,34 @@
+# agent-work-policy — Git作業の1操作を、permissionとhuman gateに従って実行する。
+#
+# **この playbook は操作のやり方を知らない。** 呼び出しごとに action を1つだけ受け、
+# それを内部 plugin へ渡すだけの公開面である。公開する入力・出力・保証は CONTRACT.md が正本。
+version: 2
+name: agent-work-policy
+description: Git作業の1操作を、permissionとhuman gateに従って実行する
+instructions:
+  execution:
+    directive: .input の action を1つだけ、操作契約の順序と境界に従って実行する
+  output:
+    directive: 結果をCONTRACT.mdの出力schemaへ写し、.input.output_to のpathへ書く
+
+# 欠けていたら止める。黙って劣化した結果を出さない。
+requires:
+  - {plugin: work-policy-control, marketplace: agent-work-policy}
+
+# 公開契約。1呼び出し1action。
+contract:
+  contract_id: agent-work-policy/agent-work-policy
+  contract_version: 1
+  actions: [inspect, plan, start, commit, push, pull-request, ready-for-review, merge-readiness, merge, cleanup]
+  gate_states: [allowed, waiting_for_human, denied]
+  statuses: [completed, waiting_for_human, failed]
+
+# stepsは上から実行する。skill/script/playbookは呼ぶ処理、needsは開始条件、
+# providesは完了時に登録する成果物。completionは完了判定、on_failureは失敗時の遷移。
+steps:
+  - id: apply
+    skill: apply-work-policy
+    purpose: 要求された1つのactionのpermissionとgateを適用し、許可された操作だけを実行して結果とworkspaceを返す
+    provides: [action_result, gate_state, workspace]
+    completion: artifact-set
+    on_failure: stop
