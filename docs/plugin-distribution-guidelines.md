@@ -47,7 +47,7 @@ Agent FleetはCoreとHerdr連携を分ける。CoreだけならHerdrは不要で
 
 CodexとClaude Codeの配布名・バージョン・sourceを一致させ、変更したリポジトリの検証を実行する。配布内容を変える場合はリリースのバージョンも更新する。READMEだけの修正と、利用者へ届くパッケージの変更は区別する。
 
-Git操作の許可・検証・公開はagent-work-policyのprepare.shとcontrol.pyが担当する。他のパッケージへ判断や公開操作を複製しない。
+Git操作の許可・検証・公開はagent-work-policyの公開playbookが担当する。他のパッケージへ判断や公開操作を複製せず、`steps[].playbook: agent-work-policy`で呼ぶ。公開packageのscriptを外部から直接実行しない。
 
 ## 導入と更新の確認範囲
 

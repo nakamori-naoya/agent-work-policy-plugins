@@ -3,7 +3,7 @@
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-PLUGIN="$ROOT/plugins/skills/automation/agent-work-policy"
+PLUGIN="$ROOT/plugins/skills/automation/work-policy-control"
 FIXTURE="$ROOT/tests/fixtures/publication-authority-contract.yml"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/publication-authority-contract.XXXXXX") || exit 2
 CFG=""
@@ -37,7 +37,7 @@ else
 fi
 echo "  Given 公開先repositoryとagent-work-policy設定fixtureがある"
 mkdir -p "$TMP/repository/.harness-plugins"
-cp "$FIXTURE" "$TMP/repository/.harness-plugins/agent-work-policy.config.yml"
+cp "$FIXTURE" "$TMP/repository/.harness-plugins/work-policy-control.config.yml"
 git -C "$TMP/repository" init -q -b main
 git -C "$TMP/repository" config user.email fixture@example.invalid
 git -C "$TMP/repository" config user.name fixture
@@ -384,7 +384,7 @@ if [ "$?" -eq 0 ] && jq -e '.status=="created"' <<<"$output" >/dev/null && rg -q
 cp "$FIXTURE" "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
 yq -i '.permissions.pull_request = false' "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
 mkdir -p "$TMP/pull-request-disabled/.harness-plugins"
-cp "$TMP/repository/.harness-plugins/pull-request-disabled.yml" "$TMP/pull-request-disabled/.harness-plugins/agent-work-policy.config.yml"
+cp "$TMP/repository/.harness-plugins/pull-request-disabled.yml" "$TMP/pull-request-disabled/.harness-plugins/work-policy-control.config.yml"
 git -C "$TMP/pull-request-disabled" init -q -b main
 git -C "$TMP/pull-request-disabled" config user.email fixture@example.invalid
 git -C "$TMP/pull-request-disabled" config user.name fixture
@@ -404,7 +404,7 @@ cp "$FIXTURE" "$TMP/repository/.harness-plugins/merge-enabled.yml"
 yq -i '.permissions.merge = true' "$TMP/repository/.harness-plugins/merge-enabled.yml"
 yq -i '.merge.readiness.min_approvals = 0' "$TMP/repository/.harness-plugins/merge-enabled.yml"
 mkdir -p "$TMP/merge-enabled/.harness-plugins"
-cp "$TMP/repository/.harness-plugins/merge-enabled.yml" "$TMP/merge-enabled/.harness-plugins/agent-work-policy.config.yml"
+cp "$TMP/repository/.harness-plugins/merge-enabled.yml" "$TMP/merge-enabled/.harness-plugins/work-policy-control.config.yml"
 git -C "$TMP/merge-enabled" init -q -b main
 git -C "$TMP/merge-enabled" config user.email fixture@example.invalid
 git -C "$TMP/merge-enabled" config user.name fixture
@@ -489,7 +489,7 @@ yq -i '.merge.delete_branch = true' "$TMP/repository/.harness-plugins/merge-clea
 yq -i '.merge.readiness.min_approvals = 0' "$TMP/repository/.harness-plugins/merge-cleanup.yml"
 git init -q --bare "$TMP/remote.git"
 mkdir -p "$TMP/merge-cleanup/.harness-plugins"
-cp "$TMP/repository/.harness-plugins/merge-cleanup.yml" "$TMP/merge-cleanup/.harness-plugins/agent-work-policy.config.yml"
+cp "$TMP/repository/.harness-plugins/merge-cleanup.yml" "$TMP/merge-cleanup/.harness-plugins/work-policy-control.config.yml"
 git -C "$TMP/merge-cleanup" init -q -b main
 git -C "$TMP/merge-cleanup" config user.email fixture@example.invalid
 git -C "$TMP/merge-cleanup" config user.name fixture
@@ -525,7 +525,7 @@ make_ff_repo() {
   FF_REMOTE="$TMP/$name.git"
   git init -q --bare "$FF_REMOTE"
   mkdir -p "$FF_REPO/.harness-plugins"
-  cp "$TMP/repository/.harness-plugins/fast-forward.yml" "$FF_REPO/.harness-plugins/agent-work-policy.config.yml"
+  cp "$TMP/repository/.harness-plugins/fast-forward.yml" "$FF_REPO/.harness-plugins/work-policy-control.config.yml"
   git -C "$FF_REPO" init -q -b main
   git -C "$FF_REPO" config user.email fixture@example.invalid
   git -C "$FF_REPO" config user.name fixture
@@ -577,7 +577,7 @@ done
 
 make_ff_repo protection-approvals || exit 1
 rm -f "$FF_CFG"
-yq -i '.merge.readiness.min_approvals = 1' "$FF_REPO/.harness-plugins/agent-work-policy.config.yml"
+yq -i '.merge.readiness.min_approvals = 1' "$FF_REPO/.harness-plugins/work-policy-control.config.yml"
 FF_CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$FF_REPO") || exit 1
 approved_reviews='[{"author":{"login":"reviewer"},"submittedAt":"2026-09-03T00:00:00Z","state":"APPROVED"}]'
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REVIEWS_JSON="$approved_reviews" FAKE_PROTECTION_APPROVALS=0 python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
@@ -628,7 +628,7 @@ done
 
 make_ff_repo second-view-approval-lost || exit 1
 rm -f "$FF_CFG"
-yq -i '.merge.readiness.min_approvals = 1' "$FF_REPO/.harness-plugins/agent-work-policy.config.yml"
+yq -i '.merge.readiness.min_approvals = 1' "$FF_REPO/.harness-plugins/work-policy-control.config.yml"
 FF_CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$FF_REPO") || exit 1
 : > "$TMP/view-count"
 : > "$TMP/gh.log"

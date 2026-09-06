@@ -3,7 +3,7 @@
   "cases": [
     {
       "id": "representative-boundary",
-      "skill": "../plugins/skills/automation/agent-work-policy/skills/work-with-policy/SKILL.md",
+      "skill": "../plugins/playbooks/automation/agent-work-policy/SKILL.md",
       "messages": [
         {
           "role": "user",

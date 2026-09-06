@@ -1,0 +1,14 @@
+{
+  "name": "work-policy-control",
+  "version": "2.0.0",
+  "description": "解決済みpolicyに従い、workspace・permission・human gate・merge readinessを1操作ずつ適用する内部plugin",
+  "author": {
+    "name": "NaoyaNakamori"
+  },
+  "skills": "./skills/",
+  "metadata": {
+    "harness": {
+      "contractVersion": 1
+    }
+  }
+}

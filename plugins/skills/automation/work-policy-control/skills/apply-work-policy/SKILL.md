@@ -1,9 +1,9 @@
 ---
-name: work-with-policy
-description: Git repositoryでAIエージェントの変更作業を開始し、設定に従ってworktreeまたはbranchを作り、検証、commit、push、PR作成、merge、merge後のworktree削除をpermission・human gate・review条件で制御する。「このissueを実装してPRまで」「worktreeで作業して」「承認後にmergeして」と依頼されたとき、またrepositoryのAGENTS.mdで利用を必須にしているときに使う。
+name: apply-work-policy
+description: 解決済みのwork policyに従い、要求された1つの操作（照会、plan、start、commit、push、PR作成、公開、merge readiness、merge、片付け）のpermissionとhuman gateを適用して実行する。agent-work-policy playbookの工程として呼ばれる内部skillである。
 ---
 
-# work-with-policy
+# apply-work-policy
 
 設定はsystem、利用者、実行環境の権限を増やさない。次を順番どおりに実行し、`control.py`を素の`git`や`gh`で迂回しない。
 
@@ -34,23 +34,32 @@ printf '%s\n' "$CFG_FILE"
 
 [設定値](../../references/settings.md)を解決済みYAMLから読み、[操作契約](../../references/operation-contract.md)を全操作へ適用する。
 
-## 下流pluginから公開操作を委譲する
+## 1.1 1操作だけを求められたとき
 
-下流pluginは解決済み設定と対象repositoryを`control.py`へ渡す。
+`agent-work-policy` playbookの工程として呼ばれた場合は、**渡された1つのactionだけ**を実行する。
 
-```bash
-POLICY_ROOT="/absolute/path/to/agent-work-policy"
-TARGET_REPO="/absolute/path/to/repository-being-published"
-CFG_FILE=$(bash "$POLICY_ROOT/scripts/prepare.sh" "$TARGET_REPO") || exit 2
-printf '%s\n' "$CFG_FILE"
+**`inspect` は照会であり、既存branchでもdirtyでも止めない。** permissionもgateも適用しない（何も変更しないため）。`plan`の停止条件をここへ持ち込まない。以降の節の順番は通しで作業するときの並びであり、1操作の呼び出しでは該当する操作だけを行う。
 
-python3 "$POLICY_ROOT/scripts/control.py" permission --config "$CFG_FILE" --action pull_request
-python3 "$POLICY_ROOT/scripts/control.py" pull-request --config "$CFG_FILE" --repo "$TARGET_REPO" \
-  --title '<title>' --body-file '<body-file>'
-python3 "$POLICY_ROOT/scripts/control.py" ready-for-review --config "$CFG_FILE" --repo "$TARGET_REPO" --pr <number>
-```
+| action | 実行するcommand |
+|---|---|
+| `inspect` | `control.py inspect` |
+| `plan` | `control.py plan --branch <branch>` |
+| `start` | `control.py start --branch <branch>` |
+| `commit` | `control.py commit --paths-file <file> --message <message> [--approved]` |
+| `push` | `control.py push [--approved]` |
+| `pull-request` | `control.py pull-request --title <title> --body-file <file> [--approved]` |
+| `ready-for-review` | `control.py ready-for-review --pr <number>` |
+| `merge-readiness` | `control.py merge-readiness --pr <number>` |
+| `merge` | `control.py merge --pr <number> [--approved]` |
+| `cleanup` | `control.py cleanup --pr <number>` |
 
-入力、順序、stdout、exit、境界時の扱いは[公開委譲契約](../../references/operation-contract.md#下流plugin向けcli契約)を正本にする。
+呼び出し元へは、そのcommandのJSONに加えて次を必ず返す。
+
+1. permissionとgateの判定（許可された／承認待ち／拒否された）
+2. 承認待ちなら、承認対象が分かる材料（変更規模、送り先、差分・検証結果・readinessの全文を書いたfileの絶対path）
+3. 作業場所の値。`${.workspace.base_branch}`、`${.git.remote}`、`${.pull_request.draft}`と、この呼び出しの作業branch・worktree
+
+**呼び出し元は設定fileを読まない。** 呼び出し元が必要とする値は、この3つ目としてこちらから返す。
 
 ## 2. planして作業場所を開始する
 

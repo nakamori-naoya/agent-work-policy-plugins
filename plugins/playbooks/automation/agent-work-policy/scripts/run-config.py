@@ -24,8 +24,9 @@ def main():
         info = json.loads(metadata.read_text())
         if info != {'schema': 1, 'config': str(path), 'uid': os.getuid()} or metadata.is_symlink():
             raise ValueError('run ownership mismatch')
-        if {x.name for x in path.parent.iterdir()} - {'resolved.yml', 'run.json'}:
+        if {x.name for x in path.parent.iterdir()} - {'resolved.yml', 'run.json', 'bindings.lock.yml'}:
             raise ValueError('unexpected run files; refusing cleanup')
+        (path.parent / 'bindings.lock.yml').unlink(missing_ok=True)
         path.unlink(missing_ok=True)
         metadata.unlink()
         path.parent.rmdir()
@@ -36,12 +37,17 @@ def main():
     try:
         arguments = remainder[1:] if remainder[:1] == ['--'] else remainder
         with path.open('w') as output:
-            result = subprocess.run(['bash', str(root / 'scripts/resolve.sh'), *arguments], stdout=output)
+            # 入口の束縛lockはこのrun領域へ置く。resolve.shがHARNESS_PLUGIN_RUN_DIRで受ける。
+            environment = dict(os.environ, HARNESS_PLUGIN_RUN_DIR=str(directory))
+            result = subprocess.run(['bash', str(root / 'scripts/resolve.sh'), *arguments], stdout=output, env=environment)
         if result.returncode or not path.stat().st_size:
             raise ValueError('config resolution failed')
         path.chmod(0o600)
         (directory / 'run.json').write_text(json.dumps({'schema': 1, 'config': str(path), 'uid': os.getuid()}))
         (directory / 'run.json').chmod(0o600)
+        lock = directory / 'bindings.lock.yml'
+        if lock.exists():
+            lock.chmod(0o600)
         print(path)
     except BaseException:
         shutil.rmtree(directory)

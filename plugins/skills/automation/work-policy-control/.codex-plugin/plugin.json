@@ -1,0 +1,25 @@
+{
+  "name": "work-policy-control",
+  "version": "2.0.0",
+  "skills": "./skills/apply-work-policy/",
+  "description": "解決済みpolicyに従い、workspace・permission・human gate・merge readinessを1操作ずつ適用する内部plugin",
+  "author": {
+    "name": "NaoyaNakamori"
+  },
+  "interface": {
+    "displayName": "Work Policy Control",
+    "shortDescription": "解決済みpolicyに従い、workspace・permission・human gate・merge readinessを1操作ずつ適用する",
+    "longDescription": "解決済みpolicyに従い、workspace・permission・human gate・merge readinessを1操作ずつ適用する内部plugin",
+    "developerName": "NaoyaNakamori",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Skills"
+    ],
+    "defaultPrompt": "work-policy-controlを使ってこの操作を適用してください。"
+  },
+  "metadata": {
+    "harness": {
+      "contractVersion": 1
+    }
+  }
+}

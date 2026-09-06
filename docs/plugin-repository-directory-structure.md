@@ -55,7 +55,7 @@
 | `plugins/` | 全leaf plugin rootを領域別に収容 | Catalogが指すleafだけ対象 | 対象pluginの両manifest |
 | `shared/` | 複数pluginへ同期する共通sourceの正本 | 直接は対象外 | `prepare.sh`、`skill/resolve.sh`、`playbook/resolve.sh` |
 | `scripts/` | Repository全体の整合性と構文を検査 | 対象外 | `validate.sh` |
-| `.harness-plugins/` | Source repositoryのagent作業方針 | 対象外 | `agent-work-policy.config.yml` |
+| `.harness-plugins/` | Source repositoryのagent作業方針 | 対象外 | `work-policy-control.config.yml` |
 | `AGENTS.md` | Repository責務、禁止事項、検証command | 対象外 | `AGENTS.md` |
 | `README.md` | Marketplaceの目的、導入、依存、設定 | 対象外 | `README.md` |
 | `tests/`、`docs/` | 追加test、作例、演習 | 対象外 | Repository固有の入口 |
@@ -142,7 +142,7 @@
 |---|---|---|
 | `agent-fleet-plugins` | fleetの状態機械とruntime adapterを持つ | orchestration固有の実装として妥当 |
 | `agent-roles-plugins` | 複数agentの役割分担を定義する単一skill | 責務を実装作業から分離しており妥当 |
-| `agent-work-policy-plugins` | 単一skill。`shared/skill/`を持つ | 妥当 |
+| `agent-work-policy-plugins` | Playbook package 1件。公開playbook `agent-work-policy` と内部skill `work-policy-control` | 公開面をplaybookへ一本化しており妥当 |
 | `bdd-discovery-and-formulation-plugins` | 11 plugin、専門知識の`shared/*`、`VALIDATION.md`、分割validator、空の`plugins/playbooks/authoring/` | 専門sharedと詳細検証は妥当。空directoryは整理候補 |
 | `collect-and-digest-plugins` | 3 skillと2 playbook。`digest`は複数skillを1 rootに収容 | 妥当 |
 | `grill-plugins` | 単一skill。題材固有の観点を持たない | 妥当 |
