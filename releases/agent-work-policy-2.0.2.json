@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "plugin": "agent-work-policy",
+  "version": "2.0.2",
+  "created_at": "2026-09-07T01:30:03.276884+00:00",
+  "notes": "共通実行基盤を2.5.0へ更新する。doctorのfull診断は、同梱既定に実値を置かないrequiredなprompt parameterを持つskillを実行せず、skipped: requires-overrideと必要なパラメータ名を出す（NGにしない）。依存の解決は実配布物に対して行い、契約ID→package rootのJSONか兄弟checkout ../<marketplace>-plugins/plugins から探して、どちらでも見つからなければfixtureへ倒さず理由付きで落とす。依存参照の検査をresolverとlintで一つの関数へ寄せ、内部依存のskill名参照は解決結果に実在する名前だけを許してinternal-skill-unknownで綴り違いを止める。explainの依存行に、論理名から解決した実体（marketplace/plugin）と、束縛で実体が変わったときの出典層を出す。CIの兄弟checkoutは既定でmainを取り、同名branchを採る条件をpull_request・非fork・同ownerの3条件に限定して、選んだrefと理由をログへ出す。",
+  "breaking": "無し。契約ID、契約版、公開入口、入力schema、出力schemaは変えない。explainの依存行の書式が「論理名 → marketplace/plugin」へ変わるが、これは人が読む診断出力であり、解決済みYAMLの構造は変えていない。内部依存のskill名参照に実在検査が入るため、存在しない名前を書いていた設定だけがinternal-skill-unknownで停止する。",
+  "migration": "無し。再インストールでpatch版に入れ替わる。設定ファイル、dependencies.yml、消費側のplaybook.ymlはそのまま使える。explainの依存行を機械で読んでいた場合だけ新しい書式へ合わせる。doctorを実配布物なしで走らせていた場合は、兄弟checkoutを置くか、契約ID→package rootのJSONをHARNESS_PLUGIN_REAL_ROOTSで渡す。",
+  "checks": {
+    "codex": {
+      "status": "manifest-and-contract-tests-passed",
+      "native-client-installation": "not-executed",
+      "evidence": "HARNESS_PLUGIN_RUNTIME=codex /bin/bash scripts/validate.sh: exit 0（bash 3.2、配布構造・公開manifest・解決・負の試験・消費側契約lint）"
+    },
+    "claude": {
+      "status": "manifest-and-contract-tests-passed",
+      "native-client-installation": "not-executed",
+      "evidence": "HARNESS_PLUGIN_RUNTIME=claude /bin/bash scripts/validate.sh: exit 0（bash 3.2、配布構造・公開manifest・解決・負の試験・消費側契約lint）"
+    },
+    "real-distribution": "fixtureだけで緑にせず、兄弟checkoutの実配布物を解決させた",
+    "consumer-contract-lint": "scripts/lint-consumer-contract.py: codex / claude 両runtimeで 0 finding",
+    "runtime-sync": "scripts/sync-runtime.py --check --source <正本>: version 2.5.0、changed 空",
+    "regression": "scripts/test-hardening.py: 全緑（上書きが要るskillのskip、兄弟checkoutでの解決、内部skill名参照の実在検査、explainの依存行を試験に追加）",
+    "doctor": "python3 scripts/doctor.py --repo <対象repository>: NG 0",
+    "post-version-validation": "HARNESS_PLUGIN_RUNTIME=claude / codex の /bin/bash scripts/validate.sh: passed (exit 0)"
+  },
+  "files": [
+    ".agents/plugins/marketplace.json",
+    "plugins/.codex-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "plugins/.claude-plugin/plugin.json"
+  ]
+}
