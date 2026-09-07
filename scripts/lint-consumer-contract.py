@@ -241,6 +241,9 @@ def scan(repo: Path, runtime: str) -> list[dict]:
     declared_market, harness = own_marketplace(repo, runtime)
     internals = set((harness.get("internalPlugins") or {}))
     external_logical: dict[str, dict] = {}
+    # 内部依存は §3 のとおり外部規則の対象外だが、`.skills.<名前>` だけは実在を見る。
+    # 値は解決できた公開skill名の集合、解決できなければ None（判定しない）。
+    internal_logical: dict[str, set[str] | None] = {}
     unresolved: set[str] = set()
     for playbook_file in sorted(repo.glob("plugins/**/playbook.yml")):
         data = yaml_load(playbook_file)
@@ -253,7 +256,11 @@ def scan(repo: Path, runtime: str) -> list[dict]:
             if not isinstance(plugin, str) or not isinstance(marketplace, str):
                 continue
             if marketplace == declared_market:
-                # 自 package の内部依存。この規則の対象外（§3）。
+                # 自 package の内部依存。外部規則（§3）の対象外だが、
+                # 内部 skill 名を指す形は、その名前が実在するかだけ見る。
+                if plugin not in internal_logical:
+                    candidate = resolve_provider(module, playbook_file.parent, marketplace, plugin, runtime)
+                    internal_logical[plugin] = set(candidate["skills"]) if candidate else None
                 continue
             if plugin in external_logical:
                 continue
@@ -318,10 +325,15 @@ def scan(repo: Path, runtime: str) -> list[dict]:
             if assignment and assignment.group("dep") in external_logical:
                 tainted[assignment.group("var")] = (number, assignment.group("dep"))
             for name, segments, suffix, raw in module.dep_references(line):
-                if name not in external_logical:
+                if name in external_logical:
+                    code = module.dep_reference_violation(segments, suffix, True)
+                elif name in internal_logical:
+                    code = module.dep_reference_violation(
+                        segments, suffix, False, internal_logical[name])
+                else:
                     continue
-                if not module.dep_reference_allowed(segments, suffix):
-                    report("external-dependency-path", path, number, raw)
+                if code:
+                    report(code, path, number, raw)
             for match in module.CONFIG_REFERENCE.finditer(line):
                 if match.group("name") in external_logical:
                     report("external-dependency-config", path, number, match.group(0))

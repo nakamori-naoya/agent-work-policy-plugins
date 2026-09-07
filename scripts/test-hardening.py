@@ -744,4 +744,141 @@ class Hardening(unittest.TestCase):
         lock.write_text(json.dumps(mutated))
         self.assertEqual(call('status').returncode, 2)
 
+    def _diagnostic_repo(self, name):
+        """doctor が最低限読む repository。marketplace 検査は別 test の領分。"""
+        repo = self.base/name
+        (repo/'scripts').mkdir(parents=True, exist_ok=True)
+        (repo/'scripts/validate.sh').write_text('#!/bin/bash\nexit 0\n')
+        return repo
+
+    def test_doctor_skips_skills_that_require_an_override(self):
+        """既定値の無い required な prompt parameter を持つ skill は、実行せず skip する。"""
+        repo = self._diagnostic_repo('diagnostic')
+        cases = [
+            ('needs-override', 'version: 1\nprompt_parameters:\n  method:\n    type: string\n    required: true\n'),
+            ('needs-nested', 'version: 1\nprompt_parameters:\n  database:\n    product: {type: string, required: true}\n    version: {type: string, required: true}\n'),
+            ('has-default', 'version: 1\nprompt_parameters:\n  depth:\n    type: string\n    required: true\n    default: shallow\n'),
+        ]
+        for name, defaults in cases:
+            plugin = repo/'plugins'/name
+            (plugin/'config').mkdir(parents=True)
+            (plugin/'config/defaults.yml').write_text(defaults)
+            (plugin/'scripts').mkdir()
+            (plugin/'scripts/resolve.sh').write_text(
+                '#!/usr/bin/env bash\ntouch "' + str(self.base/'executed') + '.' + name + '"\nexit 2\n')
+        result = self.call('python3', ROOT/'scripts/doctor.py', '--repository', repo, '--repo', repo)
+        checks = {check['check']: check for check in json.loads(result.stdout)['checks']}
+        skipped = checks['resolve:plugins/needs-override/scripts/resolve.sh']
+        self.assertTrue(skipped['ok'], skipped)
+        self.assertEqual(skipped['skipped'], 'requires-override')
+        self.assertEqual(skipped['requires_override'], ['method'])
+        self.assertEqual(checks['resolve:plugins/needs-nested/scripts/resolve.sh']['requires_override'],
+                         ['database.product', 'database.version'])
+        # skip は「実行して落ちた」ではない。resolve.sh は起動していない。
+        self.assertFalse((self.base/'executed.needs-override').exists())
+        self.assertFalse((self.base/'executed.needs-nested').exists())
+        # 既定値があるなら上書きは要らない。これまでどおり実行し、結果で判断する。
+        executed = checks['resolve:plugins/has-default/scripts/resolve.sh']
+        self.assertFalse(executed['ok'])
+        self.assertTrue((self.base/'executed.has-default').exists())
+
+    def test_doctor_resolves_playbooks_against_sibling_checkouts(self):
+        """playbook の解決は fixture ではなく、兄弟 checkout の実配布物に対して行う。"""
+        if not (ROOT/'shared/playbook/resolve.sh').exists(): self.skipTest('no playbook resolver')
+        provider = self._provider('write-doc-plugins', 'write-doc', 'write-doc',
+                                  'write-doc/write-doc', 'content-types')
+        self._consumer('  - {id: work, playbook: write-doc, purpose: fixture, provides: [x]}\n',
+                       [('local-tool', 'demo'), ('write-doc', 'write-doc')])
+        repo = self._diagnostic_repo('consumer')
+        environment = dict(self.env, XDG_CONFIG_HOME=str(self.base/'config'))
+        environment.pop('HARNESS_PLUGIN_DEV_ROOTS', None)
+        environment.pop('HARNESS_PLUGIN_REAL_ROOTS', None)
+
+        def diagnose(extra=None):
+            result = subprocess.run(
+                ['python3', str(ROOT/'scripts/doctor.py'), '--repository', str(repo), '--repo', str(repo)],
+                text=True, capture_output=True, env=dict(environment, **(extra or {})), timeout=120)
+            return {check['check']: check for check in json.loads(result.stdout)['checks']}
+
+        label = 'resolve:plugins/playbooks/demo/scripts/resolve.sh'
+        checks = diagnose()
+        resolved = checks[label]
+        self.assertTrue(resolved['ok'], resolved.get('detail'))
+        self.assertTrue(any('[外部] write-doc → write-doc/write-doc' in line
+                            for line in resolved['dependencies']), resolved['dependencies'])
+        self.assertEqual(checks['dependency-bindings']['real_distribution'],
+                         {'source': 'sibling-checkout',
+                          'dependencies': {'write-doc/write-doc': str(provider)}})
+        # 兄弟が無ければ、fixture へ倒さず理由付きで NG にする。
+        absent = diagnose({'HARNESS_PLUGIN_SIBLING_ROOT': str(self.base/'nowhere')})
+        self.assertFalse(absent[label]['ok'])
+        self.assertIn('write-doc/write-doc', absent[label]['detail'])
+        self.assertFalse(absent['dependency-bindings']['ok'])
+
+    def test_internal_skill_reference_must_name_an_existing_skill(self):
+        """内部依存への .skills.<名前> は、解決結果に実在する名前だけを許す。"""
+        if not (ROOT/'shared/playbook/resolve.sh').exists(): self.skipTest('no playbook resolver')
+        provider = self._provider('provider', 'write-doc', 'write-doc', 'write-doc/write-doc',
+                                  'content-types')
+        devmap = self._devmap({'write-doc/write-doc': provider})
+        environment = dict(self.env, HARNESS_PLUGIN_DEV_ROOTS=str(devmap),
+                           XDG_CONFIG_HOME=str(self.base/'config'))
+
+        def run(reference):
+            steps = ('  - {id: work, playbook: write-doc, purpose: fixture, provides: [x],\n'
+                     '     arguments: ["' + reference + '"]}\n')
+            entry = self._consumer(steps, [('local-tool', 'demo'), ('write-doc', 'write-doc')])
+            return subprocess.run(['bash', str(entry/'scripts/resolve.sh'), str(self.base/'consumer')],
+                                  text=True, capture_output=True, env=environment, timeout=60)
+
+        allowed = run('${.deps.local-tool.skills.do-local}')
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        for reference in ['${.deps.local-tool.skills.do-remote}',
+                          "${.deps['local-tool'].skills['do-remote']}",
+                          '${.deps.local-tool.skills}']:
+            rejected = run(reference)
+            self.assertEqual(rejected.returncode, 2, reference)
+            self.assertIn('[error:internal-skill-unknown]', rejected.stderr, reference)
+        # lint も同じ関数で同じ判定をする。違うのは playbook.yml の外まで見ることだけ。
+        entry = self._consumer('  - {id: work, playbook: write-doc, purpose: fixture, provides: [x]}\n',
+                               [('local-tool', 'demo'), ('write-doc', 'write-doc')])
+        (entry/'README.md').write_text('工程は ${.deps.local-tool.skills.do-remote} に従う\n')
+        linted = subprocess.run(
+            ['python3', str(ROOT/'scripts/lint-consumer-contract.py'), '--repo',
+             str(self.base/'consumer'), '--runtime', 'claude', '--json'],
+            text=True, capture_output=True, env=environment, timeout=120)
+        self.assertEqual(linted.returncode, 1, linted.stdout + linted.stderr)
+        findings = json.loads(linted.stdout)['findings']
+        self.assertIn('internal-skill-unknown', [finding['code'] for finding in findings])
+
+    def test_explain_names_the_implementation_behind_each_logical_name(self):
+        """依存行は論理名と実体を並べ、束縛で実体が変わったときだけ出典層を添える。"""
+        if not (ROOT/'shared/playbook/resolve.sh').exists(): self.skipTest('no playbook resolver')
+        provider = self._provider('provider', 'write-doc', 'write-doc', 'write-doc/write-doc',
+                                  'content-types')
+        other = self._provider('other', 'other-doc', 'other-docs', 'write-doc/write-doc', 'other-save')
+        devmap = self._devmap({'write-doc/write-doc': provider, 'other-docs/other-doc': other})
+        config = self.base/'config'; (config/'harness-plugins').mkdir(parents=True, exist_ok=True)
+        entry = self._consumer('  - {id: work, playbook: write-doc, purpose: fixture, provides: [x]}\n',
+                               [('local-tool', 'demo'), ('write-doc', 'write-doc')])
+        environment = dict(self.env, HARNESS_PLUGIN_DEV_ROOTS=str(devmap), XDG_CONFIG_HOME=str(config))
+
+        def explain():
+            result = subprocess.run(
+                ['bash', str(entry/'scripts/resolve.sh'), str(self.base/'consumer'), '--explain'],
+                text=True, capture_output=True, env=environment, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stderr
+
+        plain = explain()
+        self.assertIn('[外部] write-doc → write-doc/write-doc 1.0.0 [', plain)
+        self.assertIn('[内部] local-tool → demo/local-tool 1.0.0 [', plain)
+        self.assertNotIn('← personal', plain)
+        (config/'harness-plugins/dependencies.yml').write_text(
+            'version: 1\nbindings:\n'
+            '  "write-doc/write-doc": {marketplace: other-docs, plugin: other-doc}\n')
+        bound = explain()
+        self.assertIn('[外部] write-doc → other-docs/other-doc 1.0.0 [', bound)
+        self.assertIn('← personal', bound)
+
 if __name__=='__main__':unittest.main()
