@@ -1,6 +1,6 @@
 {
   "name": "agent-work-policy",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Git作業の1操作を、permissionとhuman gateに従って実行するPlaybookを提供する",
   "author": {
     "name": "NaoyaNakamori"

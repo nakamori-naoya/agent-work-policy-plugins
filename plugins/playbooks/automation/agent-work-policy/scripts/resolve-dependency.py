@@ -72,6 +72,26 @@ def dep_reference_allowed(segments: list[str], suffix: str) -> bool:
     if segments == ["entry"]:
         return suffix == ""
     return False
+
+
+def dep_reference_violation(
+    segments: list[str], suffix: str, external: bool, skills: object = None
+) -> str | None:
+    """${.deps.<名前>…} を 1 件判定する。**resolver も lint もこの関数だけを使う。**
+
+    外部依存の公開面は `.root` 直下 3 点と `.entry` の 2 形だけで、それ以外は
+    `external-dependency-path` で拒否する。内部依存（同一 package）は内部契約なので
+    形は縛らないが、`.skills.<名前>` だけは解決結果に実在する名前に限る。
+    綴り違いの skill 名を静かに通すと、実行時まで誰も気付けない。
+    解決結果が手元に無い（skills が None）ときは、名前の存否を判定しない。"""
+    if external:
+        return None if dep_reference_allowed(segments, suffix) else "external-dependency-path"
+    if segments and segments[0] == "skills":
+        if skills is None:
+            return None
+        if len(segments) != 2 or segments[1] not in skills:
+            return "internal-skill-unknown"
+    return None
 SEMVER = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
@@ -754,14 +774,16 @@ def check_steps(config: dict, selected: str | None = None) -> None:
             matched = True
         active = selected == step["id"] if selected else step.get("when") is None
 
-        # (c) step 内の全文字列から、許した形以外の外部参照を拒否する。
+        # (c) step 内の全文字列から、許した形以外の依存参照を拒否する。
         # when 付きの非活性 step も対象にする。条件に違反を隠せてしまうと規則が規則でなくなる。
         for text in iter_strings(step):
             for name, segments, suffix, raw in dep_references(text):
-                if name not in external:
+                if name not in deps:
                     continue
-                if not dep_reference_allowed(segments, suffix):
-                    fail("external-dependency-path", step=step["id"], plugin=name, reference=raw)
+                code = dep_reference_violation(
+                    segments, suffix, name in external, deps[name].get("skills"))
+                if code:
+                    fail(code, step=step["id"], plugin=name, reference=raw)
             for match in CONFIG_REFERENCE.finditer(text):
                 if match.group("name") in external:
                     fail("external-dependency-config", step=step["id"],
@@ -1063,9 +1085,18 @@ def command_explain(config: dict) -> int:
     print("# 依存:", file=out)
     for name, dep in deps.items():
         label = "外部" if dep.get("dependency_scope") == "external" else "内部"
+        # 論理名と実体を1行で並べる。束縛で実体が変わったときだけ、その出典層を行末に置く。
+        # 論理名@marketplace だけでは、差し替え後にどの plugin が走るのかが読めない。
+        source = dep.get("binding_source") or {}
+        requested = dep.get("requested") or {}
+        layer = source.get("layer")
+        rebound = layer not in {None, "bundled"} and (
+            requested.get("marketplace"), requested.get("plugin")
+        ) != (dep.get("marketplace"), dep.get("plugin"))
         print(
-            f"  [{label}] {name}@{dep.get('marketplace')} {dep.get('version')} "
-            f"[{dep.get('runtime')}/{dep.get('source_kind')}]: {dep.get('root')}",
+            f"  [{label}] {name} → {dep.get('marketplace')}/{dep.get('plugin')} {dep.get('version')} "
+            f"[{dep.get('runtime')}/{dep.get('source_kind')}]: {dep.get('root')}"
+            + (f"  ← {layer}" if rebound else ""),
             file=out,
         )
         if dep.get("entry"):
