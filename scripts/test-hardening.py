@@ -282,7 +282,9 @@ class Hardening(unittest.TestCase):
     def test_all_templates_resolve_from_plugin_root(self):
         plugin=ROOT/'plugins/skills/authoring/content-types'
         if not plugin.exists():self.skipTest('no content types')
-        result=self.call('yq','-o=json','.',plugin/'assets/template-examples.yml');pairs=json.loads(result.stdout)['pairs'];self.assertEqual(len(pairs),28)
+        result=self.call('yq','-o=json','.',plugin/'assets/template-examples.yml');pairs=json.loads(result.stdout)['pairs']
+        manifest=json.loads((ROOT/'plugins/.claude-plugin/plugin.json').read_text());types=[t for i in manifest['metadata']['harness']['implements'] for t in i.get('types',[])]
+        self.assertEqual(sorted(pairs),sorted(types))
         for pair in pairs.values():
             for path in pair.values():self.assertTrue((plugin/path).is_file(),path)
     def test_semantic_runner_requires_evidence(self):

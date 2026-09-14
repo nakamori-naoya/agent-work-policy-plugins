@@ -3,7 +3,7 @@
   "source": {
     "repository": "product-planning-plugins",
     "path": "shared/runtime-source",
-    "version": "2.5.0",
+    "version": "2.5.1",
     "files": {
       "resolve-dependency.py": "9a9653740687313acc87afb59b13329d1f3f646cbfabbfa631064f6c8195dd62",
       "resolve.sh": "7dee8c589d9f9e525ce41cc0ad4cbd519881ac8a932dee72c50b0a5d32aa9174",
@@ -15,8 +15,8 @@
       "release.py": "281880055f52c48e5c2e64931150f369b8fc2f97c004ac05c82ecb4bcf275fb6",
       "evaluate-skills.py": "43272002c9183dfbb7a0f0d5658c06a47e9b8c1e97aa209d8889802a0a8eab9d",
       "claude-eval-adapter.py": "3189453325a50d6c28dd808f40acb44eb2e6c40a7e56b4a39e18579b8f37e8f9",
-      "sync-runtime.py": "f6fbcc15ab79c7c8002ff102b0c9f01cbb6ac253c93ab2951685a7dc85ea235d",
-      "test-hardening.py": "b81199dc6911c6d41e4284dbc65e8771dcabb09621f7acbfac64a3aad97d09c9",
+      "sync-runtime.py": "45dd0424fe1d52b3eb9c6f4d22d9e71db23766ff140a050d89775400f2a92542",
+      "test-hardening.py": "7c7639b21353b81d11d5aa2d39a9d344fc2e8b36bc5263dcde916447e18fae5e",
       "lint-consumer-contract.py": "59b674d813e869369ff9c1ab7d4bf96209053968f53196c04cdd0eeb833f445d",
       "validate.yml": "24a789b85a9b433e339fdb2a41fcb952820ba1d5e13c41142e6713dfc5372703"
     }
@@ -35,8 +35,8 @@
     "scripts/evaluate-skills.py": "43272002c9183dfbb7a0f0d5658c06a47e9b8c1e97aa209d8889802a0a8eab9d",
     "scripts/lint-consumer-contract.py": "59b674d813e869369ff9c1ab7d4bf96209053968f53196c04cdd0eeb833f445d",
     "scripts/release.py": "281880055f52c48e5c2e64931150f369b8fc2f97c004ac05c82ecb4bcf275fb6",
-    "scripts/sync-runtime.py": "f6fbcc15ab79c7c8002ff102b0c9f01cbb6ac253c93ab2951685a7dc85ea235d",
-    "scripts/test-hardening.py": "b81199dc6911c6d41e4284dbc65e8771dcabb09621f7acbfac64a3aad97d09c9",
+    "scripts/sync-runtime.py": "45dd0424fe1d52b3eb9c6f4d22d9e71db23766ff140a050d89775400f2a92542",
+    "scripts/test-hardening.py": "7c7639b21353b81d11d5aa2d39a9d344fc2e8b36bc5263dcde916447e18fae5e",
     "scripts/validate-distribution.py": "fdc48c31a9404bd494c5d8481054ab26eb964327050f12e30b05beebc08463cb",
     "shared/playbook/resolve-dependency.py": "9a9653740687313acc87afb59b13329d1f3f646cbfabbfa631064f6c8195dd62",
     "shared/playbook/resolve.sh": "7dee8c589d9f9e525ce41cc0ad4cbd519881ac8a932dee72c50b0a5d32aa9174",
