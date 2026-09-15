@@ -24,9 +24,15 @@ LOCK_ENTRY_KEYS = {
     "content_hash", "source_kind",
 }
 CAPABILITY_KEYS = {"document_type": "types", "action": "actions"}
-ENTRY_FILES = ("playbook.yml", "scripts/resolve.sh", "scripts/prepare.sh", "SKILL.md")
+REQUIRED_IMPLEMENTATION_VERSIONS = {"write-doc/write-doc": 2}
+ENTRY_FILES_BY_CONTRACT = {
+    1: ("playbook.yml", "scripts/resolve.sh", "scripts/prepare.sh", "SKILL.md"),
+    2: ("playbook.yml", "SKILL.md"),
+}
+DIRECT_INVOCATION_CONTRACTS = {"grill/grill", "write-doc/write-doc"}
 
 PROPERTY_REFERENCE = re.compile(r"^\$\{\s*(\.[A-Za-z0-9_.\[\]\"'-]+)\s*\}$")
+DYNAMIC_REFERENCE = re.compile(r"\$\{[^}]+\}")
 
 # ${.deps...} の解析はここ 1 箇所だけで行う。resolver も lint もこの関数を使う。
 # ドット形・ブラケット形・引用形を同じ segment 列へ正規化してから許可形と突き合わせる。
@@ -324,6 +330,9 @@ def classify_dependency(
 def validate_implements(root: Path, data: object, plugin: str, source_kind: str) -> list[dict]:
     """§3.4 I1〜I9。I10（両runtime一致）は配布validatorの担当。"""
     harness = harness_metadata(data)
+    contract_version = harness.get("contractVersion", 1)
+    if type(contract_version) is not int or contract_version not in ENTRY_FILES_BY_CONTRACT:
+        fail("dependency-incompatible", reason="contract-version", version=str(contract_version))
     declared_market = harness.get("marketplace")
     if declared_market is not None and (
         not isinstance(declared_market, str) or not IDENTIFIER.fullmatch(declared_market)
@@ -355,7 +364,7 @@ def validate_implements(root: Path, data: object, plugin: str, source_kind: str)
                 fail("implements-schema", plugin=plugin, source_kind=source_kind,
                      reason="missing-" + required)
         contract_id(item["id"], "id", "implements-id-invalid")
-        if type(item["version"]) is not int or item["version"] != 1:
+        if type(item["version"]) is not int or item["version"] != contract_version:
             fail("implements-version-invalid", plugin=plugin, source_kind=source_kind,
                  version=str(item["version"]))
         if item["kind"] != "playbook":
@@ -366,7 +375,10 @@ def validate_implements(root: Path, data: object, plugin: str, source_kind: str)
             fail("implements-entry-missing", plugin=plugin, source_kind=source_kind,
                  playbook=str(name), reason="undeclared-playbook")
         entry_root = resolved_descendant(root, playbooks[name], plugin, source_kind)
-        for relative in ENTRY_FILES:
+        entry_files = (("playbook.yml", "SKILL.md")
+                       if item["id"] in DIRECT_INVOCATION_CONTRACTS
+                       else ENTRY_FILES_BY_CONTRACT[contract_version])
+        for relative in entry_files:
             member = safe_path(entry_root, relative, exists=False)
             if not member.is_file() or member.is_symlink():
                 fail("implements-entry-missing", plugin=plugin, source_kind=source_kind,
@@ -567,7 +579,7 @@ def validate_candidate(
         if not contained(canonical, entry_root):
             fail("dependency-invalid", plugin=plugin, source_kind=source_kind, reason="entry-root-invalid")
     contract = harness.get("contractVersion", 1)
-    if type(contract) is not int or contract not in {1}:
+    if type(contract) is not int or contract not in ENTRY_FILES_BY_CONTRACT:
         fail("dependency-incompatible", reason="contract-version", version=str(contract))
     implements = validate_implements(canonical, data, plugin, source_kind)
     skills = public_skills(canonical, data)
@@ -690,36 +702,59 @@ def iter_strings(value: object):
             yield from iter_strings(item)
 
 
-def lookup(data: object, dotted: str):
-    """${.a.b} 形のプロパティ参照を自分の playbook.yml から引く。解けなければ None。"""
+INPUT_RESOLVED = "resolved"
+INPUT_UNRESOLVED = "unresolved"
+INPUT_OUT_OF_SCOPE = "out-of-scope"
+
+
+def lookup(data: object, dotted: str) -> tuple[str, object]:
+    """${.a.b} の静的scalarだけを引き、未解決と対象外の型を区別する。"""
     current = data
     for part in dotted.strip().lstrip(".").split("."):
         part = part.strip().strip("\"'[]")
         if not part or not isinstance(current, dict) or part not in current:
-            return None
+            return INPUT_UNRESOLVED, None
         current = current[part]
-    return current if isinstance(current, (str, int, float)) else None
+    if type(current) in {str, int, float, bool}:
+        return INPUT_RESOLVED, current
+    return INPUT_OUT_OF_SCOPE, current
 
 
-def resolve_step_input(config: dict, step: dict, key: str):
-    """steps[].input の値を解決する。静的リテラルか、自分の playbook.yml の
-    プロパティ参照 ${.<path>} だけを解決し、それ以外は None（＝静的には検査しない）。"""
+def classify_step_input(config: dict, step: dict, key: str) -> tuple[str, object]:
+    """steps[].input の静的scalar表示を分類する。
+
+    元の input は完全なprovider入力として常に保持する。この補助解決は再帰的な
+    object/list resolverではなく、文字列literalと静的scalar propertyだけが対象である。
+    """
     block = step.get("input")
     if not isinstance(block, dict) or key not in block:
-        return None
+        return INPUT_UNRESOLVED, None
     raw = block[key]
     if isinstance(raw, str):
         matched = PROPERTY_REFERENCE.fullmatch(raw)
         if matched:
             return lookup(config.get("playbook", {}), matched.group(1))
-        return raw
-    return None
+        # `${output_directory}` のような実行時値を静的literalとして扱うと、
+        # input_resolved / explainが「解決済み」と誤表示する。自分のplaybook
+        # propertyではないplaceholderを含む値は、実行担当がneedsから組み立てる動的値である。
+        if DYNAMIC_REFERENCE.search(raw):
+            return INPUT_UNRESOLVED, None
+        return INPUT_RESOLVED, raw
+    return INPUT_OUT_OF_SCOPE, raw
+
+
+def resolve_step_input(config: dict, step: dict, key: str):
+    """能力検査用に、静的scalarだけを返す。対象外と未解決はいずれも検査しない。"""
+    status, value = classify_step_input(config, step, key)
+    return value if status == INPUT_RESOLVED else None
 
 
 def contract_entry(dep: dict) -> dict | None:
     contract = dep.get("contract")
+    required_version = REQUIRED_IMPLEMENTATION_VERSIONS.get(contract, 1)
     for entry in dep.get("implements") or []:
-        if isinstance(entry, dict) and entry.get("id") == contract and entry.get("version") == 1:
+        if (isinstance(entry, dict) and entry.get("id") == contract
+                and entry.get("version") == required_version):
             return entry
     return None
 
@@ -751,7 +786,8 @@ def check_steps(config: dict, selected: str | None = None) -> None:
         if dep.get("content_hash") != content_hash(root):
             fail("dependency-changed", reason="content-hash", plugin=dep.get("plugin", "unknown"))
         contract = manifest.get("metadata", {}).get("harness", {}).get("contractVersion", 1)
-        if type(contract) is not int or contract not in {1} or contract != dep.get("contract_version"):
+        if (type(contract) is not int or contract not in ENTRY_FILES_BY_CONTRACT
+                or contract != dep.get("contract_version")):
             fail("dependency-incompatible", reason="contract-version")
         if validate_implements(root, manifest, dep.get("plugin", "unknown"), "check-steps") != (dep.get("implements") or []):
             fail("dependency-changed", reason="implements", plugin=dep.get("plugin", "unknown"))
@@ -819,8 +855,9 @@ def check_steps(config: dict, selected: str | None = None) -> None:
                 dep = deps[name]
                 base = Path(dep["root"])
                 safe_path(base, "playbook.yml")
-                safe_path(base, "scripts/resolve.sh")
-                safe_path(base, "scripts/prepare.sh")
+                if dep.get("contract") not in DIRECT_INVOCATION_CONTRACTS:
+                    safe_path(base, "scripts/resolve.sh")
+                    safe_path(base, "scripts/prepare.sh")
                 if name in external:
                     entry = contract_entry(dep)
                     if entry is None:
@@ -1045,19 +1082,20 @@ def command_check_input(argv: list[str]) -> int:
 
 
 def command_resolve_inputs(config: dict) -> int:
-    """解決済み設定の `playbook:` step に input_resolved を足して書き戻す。
+    """解決済み設定の `playbook:` step に保守用 input_resolved を足して書き戻す。
 
     `input` は参照形（`${.document_type}`）のまま残す。値の出どころを追えなくなるからだ。
-    静的に解けた分だけを別キーへ併記して、解決済み YAML を読むだけで
-    実際に渡る値が分かるようにする。解けない（実行時に決まる）キーは載せない。
+    静的に解けたscalarだけを別キーへ併記する。object/list/nullなどは元の`input`に
+    型を保持し、実行時placeholderとともに載せない。`input_resolved`はproviderへ渡す
+    完全input objectではなく、依存設定を保守・説明するための限定された補助表示である。
     足すのは生成物側だけで、同梱 playbook.yml と設定の未知キー検査には触れない。"""
     for step in config.get("playbook", {}).get("steps", []):
         if "playbook" not in step or not isinstance(step.get("input"), dict):
             continue
         resolved = {}
         for key in step["input"]:
-            value = resolve_step_input(config, step, key)
-            if value is not None:
+            resolution, value = classify_step_input(config, step, key)
+            if resolution == INPUT_RESOLVED:
                 resolved[key] = value
         if resolved:
             step["input_resolved"] = resolved
@@ -1070,15 +1108,21 @@ def command_explain(config: dict) -> int:
     playbook = config.get("playbook", {})
     out = sys.stdout
     print("# playbook: " + str(playbook.get("name")), file=out)
+    print("# input_resolved: 保守用の静的scalar表示（providerへ渡す完全inputではない）", file=out)
     for step in playbook.get("steps", []):
         kind = step.get("skill") or step.get("script") or ("playbook:" + str(step.get("playbook")))
         print(f"  {step.get('id')}: {kind}  — {step.get('purpose')}", file=out)
         block = step.get("input")
         if isinstance(block, dict):
             for key in sorted(block):
-                value = resolve_step_input(config, step, key)
+                resolution, value = classify_step_input(config, step, key)
                 raw = block[key]
-                shown = "(動的)" if value is None else str(value)
+                if resolution == INPUT_UNRESOLVED:
+                    shown = "(未解決・実行時)"
+                elif resolution == INPUT_OUT_OF_SCOPE:
+                    shown = "(解決対象外・inputに保持)"
+                else:
+                    shown = str(value)
                 note = f"  ({raw})" if isinstance(raw, str) and raw != shown else ""
                 print(f"      input.{key} = {shown}{note}", file=out)
     deps = config.get("deps", {})
@@ -1203,9 +1247,10 @@ def main() -> int:
         )
     scope = classify_dependency(bundle_root, bundle, marketplace, plugin, candidate)
     if scope == "external":
+        required_version = REQUIRED_IMPLEMENTATION_VERSIONS.get(contract, 1)
         entry = next(
             (item for item in candidate["implements"]
-             if item["id"] == contract and item["version"] == 1),
+             if item["id"] == contract and item["version"] == required_version),
             None,
         )
         if entry is None:
