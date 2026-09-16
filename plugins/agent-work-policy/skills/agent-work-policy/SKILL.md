@@ -16,7 +16,7 @@ repositoryが所有するpolicyに従って、Git作業の1操作を実行し、
 
 ## 判断基準
 
-- **入力は契約の1 actionか。** 契約ID・版、宣言に無いaction、必須値の欠落、そのactionが使わないkey、値の形、所有範囲外のpathのどれかがあれば、Git操作を行わず `status: failed`、`reason: invalid_input` を返す。操作や対象が依頼から特定できなければ推測せず一問で確認する。
+- **入力は契約の1 actionか。** 契約ID・版、宣言に無いaction、必須値の欠落、そのactionが使わないkey、値の形、所有範囲外のpathのどれかがあれば、Git操作を行わず `status: failed`、`reason: invalid_input` を返す。自然言語の依頼で操作（action）や対象repositoryが特定できないときは、外部へ変更を及ぼす操作を仮説で実行できないので、推測せず一問で確認する。
 - **照会か操作か。** `inspect` と `merge-readiness` は照会であり、working treeが汚れている、既存branchにいる、readinessが未充足という観測結果は `status: completed` のまま返す。`plan` は新しい作業を始めてよいかの判定なので、同じ状況で止まる。状況を知りたいだけなら `inspect` を使う。
 - **permissionとgateは別物か。** `permissions.*` が false なら承認を得ても実行せず `permission_denied` を返し、承認質問へ変えない。`gates.*` が true なら permission が通ったうえで操作前に止まり、`waiting_for_human` と `approval_target` を返す。承認を実際に得た再呼び出しにだけ `approved: true` を付ける。
 - **結果は実行した操作だけを示しているか。** CLIのnonzero、取得不能、scope外path、公開先やSHAの不一致、部分適用を成功として扱わない。`commit` を受けて `push` まで進むような、入力に無い次工程を実行しない。
@@ -38,10 +38,16 @@ policyの各値が操作のどこへ効くかは[設定値](references/settings.
 
 ## 停止条件
 
-- policy設定fileが無い（`policy_missing`）、または schema に合わない（`error` と診断）。操作を行わず報告する。
-- 入力が契約に合わない（`invalid_input`）。入力を直してから呼び直す。
+この入口の操作はすべてrepositoryの外部状態（working tree、branch、remote、PR）を変えるので、判断の揺れを仮説で埋めて実行しない。止まるのは次の場合である。操作を行わず、または実行した操作だけを結果として報告する。
+
+- policy設定fileが無い（`policy_missing`）、または schema に合わない（`error` と診断）。
+- 入力が契約に合わない（`invalid_input`）、または自然言語の依頼からactionと対象が特定できない。入力を直すか一問で確認してから呼び直す。
 - human gateで承認待ち（`waiting_for_human`）。承認対象を提示して待つ。承認が得られなければ、その操作を実行済みとして扱わない。
-- permission拒否（`permission_denied`）、readiness未充足のmerge（`not_ready`）、検証失敗（`verification_failed`）、`merge_partial` / `merge_failed` / `cleanup_failed`。停止して報告する。`merge_partial` ではmergeを再実行しない。
+- permission拒否（`permission_denied`）、readiness未充足のmerge（`not_ready`）、検証失敗（`verification_failed`）、`merge_partial` / `merge_failed` / `cleanup_failed`。`merge_partial` ではmergeを再実行しない。
+
+次は止まらず、観測結果として返す。
+
+- `inspect` と `merge-readiness` で、working treeが汚れている、既存branchにいる、readinessが未充足である。`status: completed` のまま観測結果を返し、判断は呼び出し元に委ねる。
 
 ## 出力
 
