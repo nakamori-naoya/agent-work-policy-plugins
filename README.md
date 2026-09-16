@@ -127,9 +127,9 @@ bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/scripts/validate.
 
 ## 保守tool
 
-`scripts/doctor.py`、`scripts/lint-consumer-contract.py`、`scripts/evaluate-skills.py`、`scripts/release.py`、`scripts/sync-runtime.py`、`scripts/test-hardening.py`、`scripts/validate-distribution.py` と `shared/` は、Product Planning repositoryの `shared/runtime-source` を正本とする保守用の複製である。個別に編集せず、正本側の生成コマンドで取り込む。実行時に別repositoryや生成CLIは不要である。
+保守用tool（doctor / lint-consumer-contract / evaluate-skills / release / test-hardening / validate-plugin-repository）の正本は兄弟checkoutの `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools/` の実在を確認してから呼び、無ければ止まる。CIの `validate.yml` も `harness-tools` を兄弟checkoutして `harness-tools/ci/validate.sh` を実行する。呼び方は `../harness-tools/README.md` にある。
 
-[意味評価fixture](evals/scenarios.json)を[評価runner](scripts/evaluate-skills.py)へ渡した記録は、criterionの真偽を機械の合否にせず、人またはエージェントが根拠付きで評価する。
+[意味評価fixture](evals/scenarios.json)を `harness-tools` の評価runner（`scripts/run-evals.sh`）へ渡した記録は、criterionの真偽を機械の合否にせず、人またはエージェントが根拠付きで評価する。
 
 ## 配置と設定の変更（2026-09-16）
 
