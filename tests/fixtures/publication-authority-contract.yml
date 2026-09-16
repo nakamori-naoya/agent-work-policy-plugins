@@ -29,6 +29,3 @@ merge:
     min_approvals: 1
     require_checks_passed: true
     require_no_unresolved_threads: true
-instructions:
-  execution:
-    directive: permissionを承認で上書きせず、readinessを満たしてからhuman gateを提示し、許された操作だけを実行する

@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "agent-work-policy",
-      "source": "./plugins",
+      "source": "./plugins/agent-work-policy",
       "description": "Git作業の1操作を、repositoryごとのpermissionとhuman gateに従って実行する",
       "version": "2.0.3"
     }
