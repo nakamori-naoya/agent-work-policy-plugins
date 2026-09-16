@@ -3,11 +3,11 @@
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-PLUGIN="$ROOT/plugins/skills/automation/work-policy-control"
+PLUGIN="$ROOT/plugins/agent-work-policy/skills/agent-work-policy"
 FIXTURE="$ROOT/tests/fixtures/publication-authority-contract.yml"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/publication-authority-contract.XXXXXX") || exit 2
 CFG=""
-trap 'rm -f "$CFG"; rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"' EXIT
 FAIL=0
 
 ok() { echo "  ok: $1"; }
@@ -37,7 +37,7 @@ else
 fi
 echo "  Given 公開先repositoryとagent-work-policy設定fixtureがある"
 mkdir -p "$TMP/repository/.harness-plugins"
-cp "$FIXTURE" "$TMP/repository/.harness-plugins/work-policy-control.config.yml"
+cp "$FIXTURE" "$TMP/repository/.harness-plugins/agent-work-policy.config.yml"
 git -C "$TMP/repository" init -q -b main
 git -C "$TMP/repository" config user.email fixture@example.invalid
 git -C "$TMP/repository" config user.name fixture
@@ -270,12 +270,12 @@ fi
 EOF
 chmod +x "$TMP/bin/gh"
 
-echo "  When prepare.shが設定を解決し、control.pyへ渡す"
-CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/repository") || { ng "prepare.sh resolves config"; exit 1; }
-if yq -e '.repo_root and .plugin_root and .permissions.pull_request == true' "$CFG" >/dev/null; then
-  ok "prepare.sh returns a resolved config path"
+echo "  When repository rootのpolicy設定fileをcontrol.pyへ渡す"
+CFG="$TMP/repository/.harness-plugins/agent-work-policy.config.yml"
+if yq -e '.permissions.pull_request == true' "$CFG" >/dev/null; then
+  ok "policy file is read directly from the repository"
 else
-  ng "resolved config is incomplete"
+  ng "policy file is incomplete"
 fi
 mkdir "$TMP/other-repository"
 git -C "$TMP/other-repository" init -q -b main
@@ -384,7 +384,7 @@ if [ "$?" -eq 0 ] && jq -e '.status=="created"' <<<"$output" >/dev/null && rg -q
 cp "$FIXTURE" "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
 yq -i '.permissions.pull_request = false' "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
 mkdir -p "$TMP/pull-request-disabled/.harness-plugins"
-cp "$TMP/repository/.harness-plugins/pull-request-disabled.yml" "$TMP/pull-request-disabled/.harness-plugins/work-policy-control.config.yml"
+cp "$TMP/repository/.harness-plugins/pull-request-disabled.yml" "$TMP/pull-request-disabled/.harness-plugins/agent-work-policy.config.yml"
 git -C "$TMP/pull-request-disabled" init -q -b main
 git -C "$TMP/pull-request-disabled" config user.email fixture@example.invalid
 git -C "$TMP/pull-request-disabled" config user.name fixture
@@ -393,9 +393,8 @@ git -C "$TMP/pull-request-disabled" add tracked
 git -C "$TMP/pull-request-disabled" commit -qm initial
 git -C "$TMP/pull-request-disabled" switch -qc agent/delegate
 git -C "$TMP/pull-request-disabled" remote add origin "$TMP/repository-origin.git"
-CFG_DISABLED=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/pull-request-disabled") || { ng "pull-request-disabled config resolves"; exit 1; }
+CFG_DISABLED="$TMP/pull-request-disabled"/.harness-plugins/agent-work-policy.config.yml
 expect_json 3 forbidden python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG_DISABLED" --repo "$TMP/pull-request-disabled" --pr 1
-rm -f "$CFG_DISABLED"
 
 echo "  And merge-readinessとmergeはforbidden・gate待ち・失敗を区別する"
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG" --repo "$TMP/repository" --pr 1
@@ -404,7 +403,7 @@ cp "$FIXTURE" "$TMP/repository/.harness-plugins/merge-enabled.yml"
 yq -i '.permissions.merge = true' "$TMP/repository/.harness-plugins/merge-enabled.yml"
 yq -i '.merge.readiness.min_approvals = 0' "$TMP/repository/.harness-plugins/merge-enabled.yml"
 mkdir -p "$TMP/merge-enabled/.harness-plugins"
-cp "$TMP/repository/.harness-plugins/merge-enabled.yml" "$TMP/merge-enabled/.harness-plugins/work-policy-control.config.yml"
+cp "$TMP/repository/.harness-plugins/merge-enabled.yml" "$TMP/merge-enabled/.harness-plugins/agent-work-policy.config.yml"
 git -C "$TMP/merge-enabled" init -q -b main
 git -C "$TMP/merge-enabled" config user.email fixture@example.invalid
 git -C "$TMP/merge-enabled" config user.name fixture
@@ -414,7 +413,7 @@ git -C "$TMP/merge-enabled" commit -qm initial
 git -C "$TMP/merge-enabled" switch -qc agent/delegate
 git -C "$TMP/merge-enabled" remote add origin "$TMP/repository-origin.git"
 git -C "$TMP/merge-enabled" push -q --force origin main agent/delegate
-CFG_MERGE=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/merge-enabled") || { ng "merge-enabled config resolves"; exit 1; }
+CFG_MERGE="$TMP/merge-enabled"/.harness-plugins/agent-work-policy.config.yml
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_MERGE_STATE=BLOCKED FAKE_RULESET_BYPASS=pull_requests_only python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 0 ] && jq -e '.status=="ready" and .ruleset_bypass.authorized==true and .ruleset_bypass.ruleset_ids==[9001]' <<<"$output" >/dev/null; then ok "current user PR ruleset bypass satisfies zero-approval policy"; else ng "current user PR ruleset bypass was not honored: $output"; fi
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_MERGE_STATE=BLOCKED FAKE_RULESET_BYPASS=never python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
@@ -479,7 +478,6 @@ done
 git -C "$TMP/merge-enabled" remote set-url origin 'ssh://git@ghe.example.com/fixture/repository.git'
 expect_json 0 ready env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true FAKE_REPO_SSH_URL='git@ghe.example.com:unused/unused.git' FAKE_WEB_URL='https://ghe.example.com/fixture/repository' python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
 git -C "$TMP/merge-enabled" remote set-url origin "$TMP/repository-origin.git"
-rm -f "$CFG_MERGE"
 
 echo "  And merge後にremote branchが既に無ければcleanupは冪等に成功する"
 cp "$FIXTURE" "$TMP/repository/.harness-plugins/merge-cleanup.yml"
@@ -489,7 +487,7 @@ yq -i '.merge.delete_branch = true' "$TMP/repository/.harness-plugins/merge-clea
 yq -i '.merge.readiness.min_approvals = 0' "$TMP/repository/.harness-plugins/merge-cleanup.yml"
 git init -q --bare "$TMP/remote.git"
 mkdir -p "$TMP/merge-cleanup/.harness-plugins"
-cp "$TMP/repository/.harness-plugins/merge-cleanup.yml" "$TMP/merge-cleanup/.harness-plugins/work-policy-control.config.yml"
+cp "$TMP/repository/.harness-plugins/merge-cleanup.yml" "$TMP/merge-cleanup/.harness-plugins/agent-work-policy.config.yml"
 git -C "$TMP/merge-cleanup" init -q -b main
 git -C "$TMP/merge-cleanup" config user.email fixture@example.invalid
 git -C "$TMP/merge-cleanup" config user.name fixture
@@ -499,7 +497,7 @@ git -C "$TMP/merge-cleanup" commit -qm initial
 git -C "$TMP/merge-cleanup" switch -qc agent/delegate
 git -C "$TMP/merge-cleanup" remote add origin "$TMP/remote.git"
 git -C "$TMP/merge-cleanup" push -q origin main agent/delegate
-CFG_CLEANUP=$(bash "$PLUGIN/scripts/prepare.sh" "$TMP/merge-cleanup") || { ng "merge-cleanup config resolves"; exit 1; }
+CFG_CLEANUP="$TMP/merge-cleanup"/.harness-plugins/agent-work-policy.config.yml
 expect_json 0 merged env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=merged FAKE_REMOTE_DELETE_REF="$TMP/remote.git" python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_CLEANUP" --repo "$TMP/merge-cleanup" --pr 1
 if git --git-dir "$TMP/remote.git" show-ref --verify --quiet refs/heads/agent/delegate; then
   ng "already absent remote branch remains"
@@ -510,7 +508,6 @@ fi
 echo "  But remote照会の通信・権限相当エラーはcleanup失敗のまま返す"
 git -C "$TMP/merge-cleanup" remote set-url origin "$TMP/missing-remote.git"
 expect_json 3 merged_cleanup_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=merged python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_CLEANUP" --repo "$TMP/merge-cleanup" --pr 1
-rm -f "$CFG_CLEANUP"
 
 echo "  And fast-forwardは同一headと未進行baseだけを直接更新し、GitHub反映まで確認する"
 cp "$FIXTURE" "$TMP/repository/.harness-plugins/fast-forward.yml"
@@ -525,7 +522,7 @@ make_ff_repo() {
   FF_REMOTE="$TMP/$name.git"
   git init -q --bare "$FF_REMOTE"
   mkdir -p "$FF_REPO/.harness-plugins"
-  cp "$TMP/repository/.harness-plugins/fast-forward.yml" "$FF_REPO/.harness-plugins/work-policy-control.config.yml"
+  cp "$TMP/repository/.harness-plugins/fast-forward.yml" "$FF_REPO/.harness-plugins/agent-work-policy.config.yml"
   git -C "$FF_REPO" init -q -b main
   git -C "$FF_REPO" config user.email fixture@example.invalid
   git -C "$FF_REPO" config user.name fixture
@@ -542,7 +539,7 @@ make_ff_repo() {
   FF_HEAD=$(git -C "$FF_REPO" rev-parse HEAD)
   git -C "$FF_REPO" remote add origin "$FF_REMOTE"
   git -C "$FF_REPO" push -q origin main agent/delegate
-  FF_CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$FF_REPO") || { ng "fast-forward config resolves"; return 1; }
+  FF_CFG="$FF_REPO"/.harness-plugins/agent-work-policy.config.yml
 }
 
 make_ff_repo fast-forward-success || exit 1
@@ -564,7 +561,6 @@ else
   ng "an extra network call remains between final readiness and updateRefs"
 fi
 if [ "$(rg -c '^repo view ' "$TMP/gh.log")" -eq 1 ]; then ok "merge fixes repository identity once"; else ng "merge re-resolved repository identity"; fi
-rm -f "$FF_CFG"
 
 echo "  And fast-forwardはpolicy要求以上のserver branch protectionを必須にする"
 for protection_case in conversations admins; do
@@ -572,17 +568,14 @@ for protection_case in conversations admins; do
   if [ "$protection_case" = conversations ]; then protection_env=FAKE_PROTECTION_CONVERSATIONS; expected_reason=protection:conversation_resolution; else protection_env=FAKE_PROTECTION_ADMINS; expected_reason=protection:admins; fi
   output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready "$protection_env"=false python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
   if [ "$?" -eq 3 ] && jq -e --arg reason "$expected_reason" '.status=="not_ready" and (.reasons | index($reason))' <<<"$output" >/dev/null && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then ok "$expected_reason fails closed with refs unchanged"; else ng "$expected_reason was accepted"; fi
-  rm -f "$FF_CFG"
 done
 
 make_ff_repo protection-approvals || exit 1
-rm -f "$FF_CFG"
-yq -i '.merge.readiness.min_approvals = 1' "$FF_REPO/.harness-plugins/work-policy-control.config.yml"
-FF_CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$FF_REPO") || exit 1
+yq -i '.merge.readiness.min_approvals = 1' "$FF_REPO/.harness-plugins/agent-work-policy.config.yml"
+FF_CFG="$FF_REPO"/.harness-plugins/agent-work-policy.config.yml
 approved_reviews='[{"author":{"login":"reviewer"},"submittedAt":"2026-09-03T00:00:00Z","state":"APPROVED"}]'
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REVIEWS_JSON="$approved_reviews" FAKE_PROTECTION_APPROVALS=0 python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("protection:approvals"))' <<<"$output" >/dev/null && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then ok "weaker server approval protection fails closed with refs unchanged"; else ng "weaker server approval protection was accepted"; fi
-rm -f "$FF_CFG"
 
 echo "  And 2回目readinessのstate・head・check変化はmutation前に拒否する"
 for scenario in second-view-closed second-view-head-changed second-view-base-changed second-view-head-retarget second-view-base-retarget second-view-repository-changed second-view-check-failed second-view-draft second-view-unmergeable second-view-unstable second-view-thread; do
@@ -609,7 +602,6 @@ for scenario in second-view-closed second-view-head-changed second-view-base-cha
   else
     ng "$scenario was not rejected before mutation: $output"
   fi
-  rm -f "$FF_CFG"
 done
 
 echo "  And merge直前の2回目readiness内で変化してもmutationしない"
@@ -623,13 +615,11 @@ for scenario in second-view-closed second-view-head-changed second-view-base-cha
   else
     ng "final $scenario reached mutation: $output"
   fi
-  rm -f "$FF_CFG"
 done
 
 make_ff_repo second-view-approval-lost || exit 1
-rm -f "$FF_CFG"
-yq -i '.merge.readiness.min_approvals = 1' "$FF_REPO/.harness-plugins/work-policy-control.config.yml"
-FF_CFG=$(bash "$PLUGIN/scripts/prepare.sh" "$FF_REPO") || exit 1
+yq -i '.merge.readiness.min_approvals = 1' "$FF_REPO/.harness-plugins/agent-work-policy.config.yml"
+FF_CFG="$FF_REPO"/.harness-plugins/agent-work-policy.config.yml
 : > "$TMP/view-count"
 : > "$TMP/gh.log"
 approved_reviews='[{"author":{"login":"reviewer"},"submittedAt":"2026-09-03T00:00:00Z","state":"APPROVED"}]'
@@ -639,7 +629,6 @@ if [ "$?" -eq 3 ] && jq -e '.status=="merge_failed" and .reason=="readiness_chan
 else
   ng "second-view approval loss was not rejected before mutation: $output"
 fi
-rm -f "$FF_CFG"
 
 destructive_query='mutation { updateRefs(input:{repositoryId:"fixture-repository-id",refUpdates:[{name:"refs/heads/main",beforeOid:"'"$FF_BASE"'",afterOid:"'"$FF_HEAD"'",force:false},{name:"refs/heads/agent/delegate",beforeOid:"'"$FF_HEAD"'",afterOid:"0000000000000000000000000000000000000000",force:false}]}) { clientMutationId } }'
 env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" gh api graphql -f "query=$destructive_query" >/dev/null 2>"$TMP/stderr"
@@ -653,17 +642,14 @@ git -C "$FF_REPO" commit -qam advanced
 git -C "$FF_REPO" push -q origin main
 git -C "$FF_REPO" switch -q agent/delegate
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
-rm -f "$FF_CFG"
 
 make_ff_repo fast-forward-head-mismatch || exit 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_BASE" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
-rm -f "$FF_CFG"
 
 make_ff_repo fast-forward-base-race || exit 1
 : > "$TMP/view-count"
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=advance-base-on-second-view FAKE_VIEW_COUNT="$TMP/view-count" FAKE_REMOTE="$FF_REMOTE" FAKE_ADVANCED_BASE="$FF_MID" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_MID" ]; then ok "base race does not advance to head"; else ng "base race was overwritten"; fi
-rm -f "$FF_CFG"
 
 make_ff_repo fast-forward-non-ff || exit 1
 git -C "$FF_REPO" switch -q main
@@ -673,7 +659,6 @@ FF_ADVANCED=$(git -C "$FF_REPO" rev-parse HEAD)
 git -C "$FF_REPO" push -q origin main
 git -C "$FF_REPO" switch -q agent/delegate
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_ADVANCED" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
-rm -f "$FF_CFG"
 
 make_ff_repo fast-forward-push-failure || exit 1
 cat > "$FF_REMOTE/hooks/pre-receive" <<'EOF'
@@ -687,7 +672,6 @@ if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] &&
 else
   ng "rejected atomic update changed a ref"
 fi
-rm -f "$FF_CFG"
 
 make_ff_repo fast-forward-unreflected || exit 1
 partial_output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward-unreflected FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
@@ -703,39 +687,31 @@ else
   ng "reflection timeout deleted the PR head"
 fi
 expect_json 0 cleaned env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_STATE=MERGED FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" cleanup --config "$FF_CFG" --repo "$FF_REPO" --pr 1
-rm -f "$FF_CFG"
 
 make_ff_repo update-refs-invalid-json || exit 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=update-refs-invalid-json FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
-rm -f "$FF_CFG"
 
 make_ff_repo update-refs-graphql-error || exit 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=update-refs-graphql-error FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
-rm -f "$FF_CFG"
 
 make_ff_repo update-refs-data-and-error || exit 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=update-refs-data-and-error FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
-rm -f "$FF_CFG"
 
 make_ff_repo update-refs-applied-error || exit 1
 expect_json 4 merge_partial env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=update-refs-applied-error FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_HEAD" ]; then ok "applied mutation with error is partial"; else ng "applied error fixture did not update base"; fi
-rm -f "$FF_CFG"
 
 make_ff_repo update-refs-applied-lookup-failure || exit 1
 expect_json 4 merge_partial env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=update-refs-applied-lookup-failure FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
-rm -f "$FF_CFG"
 
 make_ff_repo cleanup-head-mismatch || exit 1
 git --git-dir "$FF_REMOTE" update-ref refs/heads/agent/delegate "$FF_MID" "$FF_HEAD"
 expect_json 3 cleanup_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_STATE=MERGED FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" cleanup --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_MID" ]; then ok "cleanup preserves a concurrently changed head"; else ng "cleanup deleted a changed head"; fi
-rm -f "$FF_CFG"
 
 make_ff_repo cleanup-exact-head || exit 1
 expect_json 0 cleaned env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_STATE=MERGED FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" cleanup --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 if git --git-dir "$FF_REMOTE" show-ref --verify --quiet refs/heads/agent/delegate; then ng "cleanup left exact head"; else ok "cleanup CAS deletes the exact PR head"; fi
-rm -f "$FF_CFG"
 
 if [ "$FAIL" -eq 0 ]; then
   echo "Publication authority contract: passed"

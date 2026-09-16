@@ -1,40 +1,40 @@
 #!/usr/bin/env bash
-# Scenario: agent-work-policy marketplaceがPlaybook package 1件で自己完結し、両runtimeで解決できる
+# Scenario: agent-work-policy marketplaceがpackage 1件・公開入口1件で自己完結し、公開契約どおりに動く
+# 機械検査は宣言と実体の対応、公開入口の入出力schema、操作前停止だけを判定する。
+# policyの妥当性、承認対象の十分性、SKILL本文の判断基準の十分性は意味評価として残す。
 set -uo pipefail
-# **継承したenvで負の試験を破らせない。** dev-map と installed-cache の上書きが外から
-# 入っていると、「解決できないはず」の負例が解決してしまい、緑のまま規則が抜ける。
-# 必要な検査は、自分でその場だけ設定する。
-unset HARNESS_PLUGIN_DEV_ROOTS HARNESS_PLUGIN_CACHE_ROOT
-# **runtimeを開発環境から拾わせない。** resolverはHARNESS_PLUGIN_RUNTIMEが無いと
-# CLAUDE_PLUGIN_ROOT / CODEX_HOME や利用者のinstalled-cacheからruntimeを推測する。
-# 手元にそれらがあると通り、何も入っていないCI runnerでは
-# dependency-runtime-unresolved で落ちる。**検査するruntimeはここで明示する。**
-# 両runtimeを見るprobeは、その場で自分のHARNESS_PLUGIN_RUNTIMEを渡して上書きする。
-unset CLAUDE_PLUGIN_ROOT CODEX_HOME CLAUDE_PLUGIN_CACHE CODEX_PLUGIN_CACHE
-export HARNESS_PLUGIN_RUNTIME=codex
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-python3 "$ROOT/scripts/test-hardening.py" || exit 1
 # **一時領域を正規形へ直さない。** macOS 既定の TMPDIR は /var/folders/... という
 # symlink 越しの path であり、契約入口はそれをそのまま受けなければならない（realpath正規化）。
-# ここで正規形へ直すと、消費側が素直に書いた入力の経路を試験しないことになる。
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/agent-work-policy-validation.XXXXXX") || exit 2
 export TMPDIR="$TMP_ROOT"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 passed=0 failed=0
 pass() { printf 'PASS: %s\n' "$1"; passed=$((passed + 1)); }
 fail() { printf 'FAIL: %s\n' "$1"; failed=$((failed + 1)); }
+skill_frontmatter_name() {
+  awk 'NR==1 { if ($0 != "---") exit 2; next } $0=="---" { found=1; exit } { print } END { if (!found) exit 2 }' "$1" \
+    | yq -er '.name | select(tag == "!!str" and length > 0)' -
+}
 
-PB="$ROOT/plugins/playbooks/automation/agent-work-policy"
-INTERNAL="$ROOT/plugins/skills/automation/work-policy-control"
+PACKAGE="$ROOT/plugins/agent-work-policy"
+ENTRY="$PACKAGE/skills/agent-work-policy"
+POLICY_EXAMPLE="$ENTRY/assets/policy.example.yml"
 
-# ── 1. 公開インストール対象はPlaybook package 1件だけである ──────────────
+# ── 1. 公開インストール対象はpackage 1件、公開入口は skills/agent-work-policy 1件 ──────
 jq -r '.plugins[].name' "$ROOT/.agents/plugins/marketplace.json" | sort > "$TMP_ROOT/expected"
-jq -r '.name' "$ROOT/plugins/.codex-plugin/plugin.json" | sort > "$TMP_ROOT/actual"
-diff -u "$TMP_ROOT/expected" "$TMP_ROOT/actual" >/dev/null && pass "公開インストール対象はagent-work-policy playbook packageだけ" || fail "plugin集合"
+jq -r '.name' "$PACKAGE/.codex-plugin/plugin.json" | sort > "$TMP_ROOT/actual"
+diff -u "$TMP_ROOT/expected" "$TMP_ROOT/actual" >/dev/null && pass "公開インストール対象はagent-work-policy packageだけ" || fail "plugin集合"
 for market in .agents/plugins/marketplace.json .claude-plugin/marketplace.json; do
   jq -r '.plugins[].name' "$ROOT/$market" | sort > "$TMP_ROOT/market"
   diff -u "$TMP_ROOT/expected" "$TMP_ROOT/market" >/dev/null && pass "$market plugin集合" || fail "$market plugin集合"
 done
+if jq -e '.plugins[0].source=="./plugins/agent-work-policy"' "$ROOT/.claude-plugin/marketplace.json" >/dev/null \
+  && jq -e '.plugins[0].source=={"source":"local","path":"./plugins/agent-work-policy"}' "$ROOT/.agents/plugins/marketplace.json" >/dev/null; then
+  pass "marketplace sourceは./plugins/agent-work-policy"
+else
+  fail "marketplace source"
+fi
 while IFS='|' read -r name version rel; do
   if jq -e --arg n "$name" --arg v "$version" '.name==$n and .version==$v' "$ROOT/$rel/.codex-plugin/plugin.json" >/dev/null \
     && jq -e --arg n "$name" --arg v "$version" '.name==$n and .version==$v' "$ROOT/$rel/.claude-plugin/plugin.json" >/dev/null; then
@@ -44,395 +44,355 @@ while IFS='|' read -r name version rel; do
   fi
   bash "$ROOT/scripts/validate-plugin-license.sh" "$ROOT/LICENSE" "$ROOT/$rel/LICENSE" && pass "$name LICENSE" || fail "$name LICENSE"
 done < <(jq -r '.plugins[] | [.name,.version,(.source.path | ltrimstr("./"))] | join("|")' "$ROOT/.agents/plugins/marketplace.json")
-bash "$ROOT/scripts/validate-marketplace.sh" "$ROOT" && pass "marketplace配布契約" || fail "marketplace配布契約"
-bash "$ROOT/scripts/test-marketplace-validation.sh" "$ROOT" && pass "marketplace配布契約の負例" || fail "marketplace配布契約の負例"
+
+manifest_dirs=$(find "$ROOT/plugins" -type d \( -name '.claude-plugin' -o -name '.codex-plugin' \) | sed "s#^$ROOT/##" | sort | tr '\n' ' ')
+[ "$manifest_dirs" = "plugins/agent-work-policy/.claude-plugin plugins/agent-work-policy/.codex-plugin " ] \
+  && pass "runtime manifest directoryはpackage rootの2つだけ" || fail "runtime manifest directoryが余分または欠落: $manifest_dirs"
+skill_files=$(find "$ROOT/plugins" -name SKILL.md -type f | sed "s#^$ROOT/##" | tr '\n' ' ')
+[ "$skill_files" = "plugins/agent-work-policy/skills/agent-work-policy/SKILL.md " ] \
+  && pass "SKILL.mdは公開入口の1本だけ（内部skillなし）" || fail "SKILL.mdの配置: $skill_files"
 
 # ── 2. manifestが公開契約を自己宣言している ─────────────────────────────
 manifest_ok=1
 for runtime in claude codex; do
   jq -e '
-    .metadata.harness as $h
-    | $h.installationSurface=="playbook-package"
-      and $h.marketplace=="agent-work-policy"
+    .skills==["./skills/agent-work-policy"]
+    and (.metadata.harness as $h
+    | $h.marketplace=="agent-work-policy"
       and $h.contractVersion==1
-      and $h.playbooks=={"agent-work-policy":"./playbooks/automation/agent-work-policy"}
-      and $h.internalPlugins=={"work-policy-control":"./skills/automation/work-policy-control"}
+      and ($h|has("installationSurface")|not) and ($h|has("entryRoot")|not) and ($h|has("internalPlugins")|not)
+      and $h.playbooks=={"agent-work-policy":"./skills/agent-work-policy"}
       and ($h.implements|type=="array" and length==1)
       and ($h.implements[0]
            | .id=="agent-work-policy/agent-work-policy" and .version==1 and .kind=="playbook"
              and .playbook=="agent-work-policy"
              and (.actions|type=="array" and length>0
                   and all(.[]; type=="string" and test("^[a-z0-9]+(-[a-z0-9]+)*$")))
-             and ((keys|sort)==["actions","id","kind","playbook","version"]))
-  ' "$ROOT/plugins/.$runtime-plugin/plugin.json" >/dev/null || manifest_ok=0
+             and ((keys|sort)==["actions","id","kind","playbook","version"])))
+  ' "$PACKAGE/.$runtime-plugin/plugin.json" >/dev/null || manifest_ok=0
 done
-jq -S '.metadata.harness' "$ROOT/plugins/.claude-plugin/plugin.json" > "$TMP_ROOT/harness-claude.json"
-jq -S '.metadata.harness' "$ROOT/plugins/.codex-plugin/plugin.json" > "$TMP_ROOT/harness-codex.json"
+jq -S '{name,version,skills,harness:.metadata.harness}' "$PACKAGE/.claude-plugin/plugin.json" > "$TMP_ROOT/harness-claude.json"
+jq -S '{name,version,skills,harness:.metadata.harness}' "$PACKAGE/.codex-plugin/plugin.json" > "$TMP_ROOT/harness-codex.json"
 diff -u "$TMP_ROOT/harness-claude.json" "$TMP_ROOT/harness-codex.json" >/dev/null || manifest_ok=0
-if [ "$manifest_ok" -eq 1 ]; then
-  pass "両runtime一致のmarketplace / playbooks / internalPlugins / implements宣言"
-else
-  fail "manifestの公開契約宣言"
-fi
-# implementsのactionsとplaybook.ymlのcontract.actionsは同じ集合である
+[ "$manifest_ok" -eq 1 ] && pass "両runtime一致のmarketplace / playbooks / implements宣言" || fail "manifestの公開契約宣言"
 if diff -u \
-  <(jq -r '.metadata.harness.implements[0].actions[]' "$ROOT/plugins/.claude-plugin/plugin.json" | sort) \
-  <(yq -o=json -I=0 '.' "$PB/playbook.yml" | jq -r '.contract.actions[]' | sort) >/dev/null; then
+  <(jq -r '.metadata.harness.implements[0].actions[]' "$PACKAGE/.claude-plugin/plugin.json" | sort) \
+  <(yq -o=json -I=0 '.' "$ENTRY/playbook.yml" | jq -r '.contract.actions[]' | sort) >/dev/null; then
   pass "manifestのactionsとplaybookのcontract.actionsが一致"
 else
   fail "actions宣言の不一致"
 fi
 
-# ── 3. 公開面の4点とCONTRACT.mdが揃っている ────────────────────────────
+# ── 3. 公開入口: SKILL / playbook.yml / CONTRACT.md / scripts ─────────────
 entry_ok=1
-for required in playbook.yml SKILL.md CONTRACT.md scripts/prepare.sh scripts/resolve.sh scripts/resolve-dependency.py scripts/validate-config.sh scripts/validate-input.sh; do
-  [ -f "$PB/$required" ] || entry_ok=0
+for required in playbook.yml SKILL.md CONTRACT.md scripts/invoke.py scripts/control.py references/settings.md references/operation-contract.md references/activation.md assets/policy.example.yml; do
+  [ -f "$ENTRY/$required" ] || entry_ok=0
 done
-[ -x "$PB/scripts/validate-config.sh" ] || entry_ok=0
-# 入口hookはsymlinkだと実行されない。通常ファイルであること。
-[ -f "$PB/scripts/validate-input.sh" ] && [ ! -L "$PB/scripts/validate-input.sh" ] || entry_ok=0
-rg -N '^name: work-with-policy$' "$PB/SKILL.md" >/dev/null || entry_ok=0
-rg -N '^name: apply-work-policy$' "$INTERNAL/skills/apply-work-policy/SKILL.md" >/dev/null || entry_ok=0
-[ "$entry_ok" -eq 1 ] && pass "公開入口4点と入口SKILL名（work-with-policy）" || fail "公開入口の構成"
+[ "$(skill_frontmatter_name "$ENTRY/SKILL.md")" = "agent-work-policy" ] || entry_ok=0
+[ "$entry_ok" -eq 1 ] && pass "公開入口の構成とSKILL名（agent-work-policy）" || fail "公開入口の構成"
 
-# **入れ子でprepareを重ねない。** 呼び出し元がE1で作った解決済みYAMLを受け取ったら、それを使う。
-# 再実行するとscopeと束縛lockが捨てられ、1回の呼び出しに実行設定が二重にできる。
-nest_ok=1
-rg -NF 'if [ -n "${CFG_FILE:-}" ]' "$PB/SKILL.md" >/dev/null || nest_ok=0
-rg -NF 'E1 で解決 → その path を E4 へ渡す' "$PB/CONTRACT.md" >/dev/null || nest_ok=0
-[ "$nest_ok" -eq 1 ] && pass "入れ子呼び出しでprepareを再実行しない（入口SKILL.mdと契約）" \
-  || fail "入れ子呼び出しでのprepare再実行禁止が入口SKILL.md／CONTRACT.mdに無い"
+printf '%s\n' '---' "name: 'agent-work-policy' # comment" '---' 'name: body-only' > "$TMP_ROOT/frontmatter-valid.md"
+printf '%s\n' '---' 'description: no name' '---' 'name: agent-work-policy' > "$TMP_ROOT/frontmatter-invalid.md"
+if [ "$(skill_frontmatter_name "$TMP_ROOT/frontmatter-valid.md")" = "agent-work-policy" ] \
+  && ! skill_frontmatter_name "$TMP_ROOT/frontmatter-invalid.md" >/dev/null 2>&1; then
+  pass "公開入口frontmatter YAML identity境界"
+else
+  fail "公開入口frontmatter YAML identity境界"
+fi
+
+playbook_json=$(yq -o=json -I=0 '.' "$ENTRY/playbook.yml")
+if jq -e '
+  .version==2 and .name=="agent-work-policy" and .requires==[]
+  and .contract.contract_id=="agent-work-policy/agent-work-policy" and .contract.contract_version==1
+  and .contract.invocation=={"input":"object","output":"object","entry":"scripts/invoke.py"}
+  and .contract.gate_states==["allowed","waiting_for_human","denied"]
+  and .contract.statuses==["completed","waiting_for_human","failed"]
+  and (.steps|map(.id))==["build-input","invoke","report"]
+  and .steps[1].script=="scripts/invoke.py"
+  and (.steps[1].provides|sort)==(["approval_target","gate_state","operation_result","reason","status","workspace"]|sort)
+' <<<"$playbook_json" >/dev/null && [ -f "$ENTRY/$(jq -r '.steps[1].script' <<<"$playbook_json")" ]; then
+  pass "playbook.ymlの契約宣言と工程がentryへ接続"
+else
+  fail "playbook.ymlの契約宣言"
+fi
 
 contract_ok=1
 for heading in '^## 1\. 入口' '^## 2\. 入力' '^## 3\. 出力' '^## 4\. 保証' '^## 5\. 利用者設定' '^### 5\.1 schema' '^## 6\. 非契約'; do
-  rg -N "$heading" "$PB/CONTRACT.md" >/dev/null || contract_ok=0
+  rg -N "$heading" "$ENTRY/CONTRACT.md" >/dev/null || contract_ok=0
 done
-for keyword in 'agent-work-policy/agent-work-policy' 'output_to' 'gate_context' 'waiting_for_human' 'workspace'; do
-  rg -NF "$keyword" "$PB/CONTRACT.md" >/dev/null || contract_ok=0
+for keyword in 'agent-work-policy/agent-work-policy' 'operation_result' 'approval_target' 'waiting_for_human' 'workspace' 'policy_missing'; do
+  rg -NF "$keyword" "$ENTRY/CONTRACT.md" >/dev/null || contract_ok=0
 done
-[ "$contract_ok" -eq 1 ] && pass "CONTRACT.mdが入口・入力・出力・保証・非契約を公開" || fail "CONTRACT.mdの節"
+[ "$contract_ok" -eq 1 ] && pass "CONTRACT.mdが入口・入力・出力・保証・利用者設定・非契約を公開" || fail "CONTRACT.mdの節"
 
-# **E4は `${.deps.<論理名>.entry}` である。** skills map を消費側から引く形は resolver と lint が
-# external-dependency-path として落とすので、CONTRACT.md に例示しない。ブラケット形も同様。
-entry_skill_name=$(rg -N -m1 '^name: (.+)$' -r '$1' "$PB/SKILL.md")
-e4_ok=1
-rg -qF '${.deps.agent-work-policy.entry}' "$PB/CONTRACT.md" || e4_ok=0
-rg -q '\$\{[^}]*\.skills[.\[]' "$PB/CONTRACT.md" && e4_ok=0
-rg -q '\$\{[^}]*\[\s*["'"'"']' "$PB/CONTRACT.md" && e4_ok=0
-[ "$e4_ok" -eq 1 ] && pass "CONTRACT.mdのE4例が \${.deps.agent-work-policy.entry} である" \
-  || fail "CONTRACT.mdのE4例がentry形でない、またはskills／ブラケット形を例示している"
-
-# 委譲節を残さない。下流は公開playbookからしか呼べない。
-if rg -N '下流plugin' "$PB/SKILL.md" "$INTERNAL/skills/apply-work-policy/SKILL.md" >/dev/null \
-  || rg -NF 'POLICY_ROOT' "$PB" "$INTERNAL" >/dev/null; then
-  fail "外部pluginへscriptの直接実行を案内する記述が残っている"
-else
-  pass "外部pluginへのscript直叩き案内なし"
-fi
+public_input_ok=1
+jq -e '.. | objects | has("output_to") | not' <<<"$playbook_json" >/dev/null || public_input_ok=0
+sed -n '/^```yaml$/,/^```$/p' "$ENTRY/CONTRACT.md" | rg -N '^output_to:|^gate_context:' >/dev/null && public_input_ok=0
+[ "$public_input_ok" -eq 1 ] && pass "公開objectにcaller用設定path・旧出力先を要求しない" || fail "公開objectに旧caller契約が残っている"
 
 # ── 3.1 利用者設定は公開契約である ─────────────────────────────────────
-# **消費側は設定を読まないが、利用者は読む。** ファイル名とキー集合を公開契約として固定し、
-# CONTRACT.md §5.1 の表と同梱既定 defaults.yml のキー集合が一致することを機械で見る。
-# 一致しないまま出すと、利用者は書いても効かないキーを渡され、exit 2 の理由も分からない。
-DEFAULTS="$INTERNAL/config/defaults.yml"
-yq -o=json -I=0 '.' "$DEFAULTS" \
+# CONTRACT.md §5.1 の表と記入例 policy.example.yml のキー集合、control.py の POLICY_SCHEMA が一致する。
+yq -o=json -I=0 '.' "$POLICY_EXAMPLE" \
   | jq -r '[paths as $p | select(($p | map(type=="number") | any) | not)
             | select((getpath($p)|type) != "object") | $p | join(".")] | unique | .[]' \
-  | sort > "$TMP_ROOT/defaults-keys"
-sed -n '/^### 5\.1 schema/,/^## 6\./p' "$PB/CONTRACT.md" \
+  | sort > "$TMP_ROOT/example-keys"
+sed -n '/^### 5\.1 schema/,/^## 6\./p' "$ENTRY/CONTRACT.md" \
   | rg -N -o '^\| `([^`]+)` \|' -r '$1' | sort -u > "$TMP_ROOT/contract-keys"
-if diff -u "$TMP_ROOT/defaults-keys" "$TMP_ROOT/contract-keys" > "$TMP_ROOT/keys.diff"; then
-  pass "CONTRACT.md §5.1 のschemaと同梱既定 defaults.yml のキー集合が一致"
+python3 - "$ENTRY/scripts/control.py" <<'PY' | sort > "$TMP_ROOT/schema-keys"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("control", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print("\n".join(m.POLICY_SCHEMA))
+PY
+if diff -u "$TMP_ROOT/example-keys" "$TMP_ROOT/contract-keys" > "$TMP_ROOT/keys.diff" && diff -u "$TMP_ROOT/contract-keys" "$TMP_ROOT/schema-keys" >> "$TMP_ROOT/keys.diff"; then
+  pass "CONTRACT.md §5.1 のschema、記入例、control.py POLICY_SCHEMA のキー集合が一致"
 else
-  fail "CONTRACT.md §5.1 と defaults.yml のキー集合が違う: $(rg -N '^[+-][^+-]' "$TMP_ROOT/keys.diff" | tr '\n' ' ')"
+  fail "CONTRACT.md §5.1 / policy.example.yml / POLICY_SCHEMA のキー集合が違う: $(rg -N '^[+-][^+-]' "$TMP_ROOT/keys.diff" | tr '\n' ' ')"
 fi
-# 設定ファイル名（利用者設定）を公開契約として名指ししていること。
-config_name_ok=1
-rg -NF 'work-policy-control.config.yml' "$PB/CONTRACT.md" >/dev/null || config_name_ok=0
-rg -NF '~/.config/harness-plugins/work-policy-control.config.yml' "$PB/CONTRACT.md" >/dev/null || config_name_ok=0
-[ "$config_name_ok" -eq 1 ] && pass "CONTRACT.mdが利用者設定のファイル名と層を公開" || fail "利用者設定のファイル名・層の公開"
+if rg -NF '`<repo>/.harness-plugins/agent-work-policy.config.yml`' "$ENTRY/CONTRACT.md" >/dev/null \
+  && ! rg -NF 'work-policy-control.config.yml' "$ENTRY/CONTRACT.md" "$ENTRY/SKILL.md" "$ENTRY/references" >/dev/null \
+  && ! rg -NF '~/.config/harness-plugins' "$ENTRY/CONTRACT.md" "$ENTRY/SKILL.md" "$ENTRY/references" >/dev/null; then
+  pass "利用者設定は repository 1層のファイル名だけを公開"
+else
+  fail "利用者設定のファイル名・層の公開"
+fi
 
-# ── 4. playbookの構造とresolverの複製 ──────────────────────────────────
-playbook_ok=1
-while IFS= read -r pb; do
-  yq -o=json -I=0 '.' "$pb" | jq -e '.version==2 and (.requires|length>0)
-    and all(.requires[]; type=="object" and ((keys|sort)==["marketplace","plugin"]) and .marketplace=="agent-work-policy")
-    and any(.requires[]; .plugin=="work-policy-control")' >/dev/null || playbook_ok=0
-  root=$(dirname "$pb")
-  cmp -s "$ROOT/shared/playbook/resolve.sh" "$root/scripts/resolve.sh" || playbook_ok=0
-  cmp -s "$ROOT/shared/playbook/resolve-dependency.py" "$root/scripts/resolve-dependency.py" || playbook_ok=0
-  cmp -s "$ROOT/shared/playbook/state.py" "$root/scripts/state.py" || playbook_ok=0
-done < <(find "$ROOT/plugins/playbooks" -name playbook.yml -type f | sort)
-[ "$playbook_ok" -eq 1 ] && pass "playbookの依存宣言（marketplace/pluginのみ）とresolver複製" || fail "playbookの依存宣言またはresolver複製"
+# ── 3.2 Zero-Plumbing: 配布指示に禁止参照形と旧runtime呼び出しが無い ──────────
+if rg -n --fixed-strings -e '${.' -e '<!-- BEGIN shared:' -e 'CLAUDE_PLUGIN_ROOT' -e 'BUNDLE_ROOT' "$ENTRY/SKILL.md" "$ENTRY/CONTRACT.md" "$ENTRY/playbook.yml" "$ENTRY/references" >/dev/null; then
+  fail "配布指示に禁止参照形が残っている"
+else
+  pass "配布指示に禁止参照形が無い"
+fi
+if rg -n 'prepare\.sh|resolve\.sh|run-config\.py|state\.py|apply-work-policy|work-policy-control|work-with-policy' "$ENTRY/SKILL.md" "$ENTRY/CONTRACT.md" "$ENTRY/playbook.yml" "$ENTRY/references" >/dev/null; then
+  fail "旧runtime・旧内部名への参照が残っている"
+else
+  pass "旧runtime・旧内部名への参照が無い"
+fi
+scripts_found=$(find "$ENTRY/scripts" -type f -not -path "*/__pycache__/*" | sed "s#^$ENTRY/scripts/##" | sort | tr '\n' ' ')
+[ "$scripts_found" = "control.py invoke.py " ] && pass "入口scriptsはcontrol.pyとinvoke.pyだけ" || fail "入口scriptsに余分なfile: $scripts_found"
 
-prepare_sync=1
-while IFS= read -r script; do cmp -s "$ROOT/shared/prepare.sh" "$script" || prepare_sync=0; done < <(find "$ROOT/plugins" -path '*/scripts/prepare.sh' -type f | sort)
-resolve_sync=1
-while IFS= read -r script; do cmp -s "$ROOT/shared/skill/resolve.sh" "$script" || resolve_sync=0; done < <(find "$ROOT/plugins/skills" -path '*/scripts/resolve.sh' -type f | sort)
-[ "$prepare_sync" -eq 1 ] && [ "$resolve_sync" -eq 1 ] && pass "shared prepare / skill resolver同期" || fail "shared prepare / skill resolver同期"
-python3 "$ROOT/scripts/sync-runtime.py" --check >/dev/null && pass "runtime複製とmanifestの一致" || fail "runtime複製とmanifestの一致"
-# **自repo内の --check だけでは、正本が進んでも緑のままになる。** 兄弟checkoutの正本と
-# 突き合わせる。兄弟が無ければ緑にせず失敗させる（CIは兄弟をcheckoutする）。
-RUNTIME_SOURCE="$ROOT/../product-planning-plugins/shared/runtime-source"
-python3 "$ROOT/scripts/sync-runtime.py" --check --source "$RUNTIME_SOURCE" >/dev/null \
-  && pass "正本（兄弟checkout）との一致" \
-  || fail "正本（兄弟checkout）と一致しない、または兄弟が無い: $RUNTIME_SOURCE"
-# **消費側の文書・script・設定に、外部依存の内部の作りを書かない。** resolverはplaybook.ymlしか
-# 見ないので、SKILL.md / README / references / scripts を静的に見るlintを同じ規則で二重に掛ける。
-lint_ok=1
-for runtime in claude codex; do
-  python3 "$ROOT/scripts/lint-consumer-contract.py" --repo "$ROOT" --runtime "$runtime" || lint_ok=0
-done
-[ "$lint_ok" -eq 1 ] && pass "消費側契約lint（両runtime）" || fail "消費側契約lint"
+# ── 4. 公開object入口のwalkthrough ───────────────────────────────────────
+PUBLIC_ENTRY="$ENTRY/scripts/invoke.py"
+DIRECT_REPO="$TMP_ROOT/direct-repo"
+mkdir -p "$DIRECT_REPO"
+git -C "$DIRECT_REPO" init -q -b main
+git -C "$DIRECT_REPO" config user.name test
+git -C "$DIRECT_REPO" config user.email test@example.invalid
+printf 'base\n' > "$DIRECT_REPO/tracked.txt"
+git -C "$DIRECT_REPO" add tracked.txt
+git -C "$DIRECT_REPO" commit -qm base
+git -C "$DIRECT_REPO" checkout -qb agent/direct-contract
 
-# ── 5. 両runtimeでplaybookが解決できる ─────────────────────────────────
-mkdir -p "$TMP_ROOT/repo" "$TMP_ROOT/config"
-for runtime in claude codex; do
-  out="$TMP_ROOT/$runtime.yml"
-  if XDG_CONFIG_HOME="$TMP_ROOT/config" HARNESS_PLUGIN_RUNTIME="$runtime" bash "$PB/scripts/resolve.sh" "$TMP_ROOT/repo" > "$out" 2> "$out.err" \
-    && yq -o=json -I=0 '.' "$out" | jq -e --arg runtime "$runtime" '
-        (.deps|keys)==["work-policy-control"]
-        and .deps["work-policy-control"].runtime==$runtime
-        and .deps["work-policy-control"].source_kind=="repository"
-        and (.deps["work-policy-control"].skills|has("apply-work-policy"))
-        and (.playbook.steps|length)==1
-        and .playbook.steps[0].skill=="apply-work-policy"' >/dev/null; then
-    pass "$runtime playbook resolution（内部pluginをrepositoryから解決）"
+# policy不在: 操作前に policy_missing で止まり、repositoryを変えない。
+printf '{"contract":"agent-work-policy/agent-work-policy","version":1,"action":"inspect","repo":"%s"}\n' "$DIRECT_REPO" \
+  | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-missing.json" 2>/dev/null; missing_code=$?
+if [ "$missing_code" -eq 3 ] && jq -e '.status=="failed" and .reason=="policy_missing" and (.workspace|keys|length)==5 and (has("approval_target")|not)' "$TMP_ROOT/direct-missing.json" >/dev/null; then
+  pass "policy設定fileが無ければ操作前に policy_missing で止まる"
+else
+  fail "policy不在の停止: $(cat "$TMP_ROOT/direct-missing.json")"
+fi
+
+mkdir -p "$DIRECT_REPO/.harness-plugins"
+cp "$POLICY_EXAMPLE" "$DIRECT_REPO/.harness-plugins/agent-work-policy.config.yml"
+printf '{"contract":"agent-work-policy/agent-work-policy","version":1,"action":"inspect","repo":"%s"}\n' "$DIRECT_REPO" \
+  | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-inspect.json"
+if jq -e '
+    .contract=="agent-work-policy/agent-work-policy" and .version==1 and .action=="inspect"
+    and .status=="completed" and .gate_state=="allowed" and (.operation_result|type)=="object"
+    and (.workspace|keys|sort)==["base_branch","branch","draft","remote","worktree"]
+    and .workspace.base_branch=="main" and .workspace.remote=="origin" and .workspace.draft==true
+    and .reason=="" and (has("approval_target")|not)
+    and ([paths(scalars) as $p | $p[-1]] | index("exit_code") | not)
+  ' "$TMP_ROOT/direct-inspect.json" >/dev/null; then
+  pass "公開entryが直接入力objectから直接結果objectを返し、workspaceをpolicyから埋める"
+else
+  fail "公開entryの直接inspect結果schema"
+fi
+
+# 旧callerキーと未知actionは policy 読み取り前に拒否し、repositoryを変えない。
+direct_before=$(git -C "$DIRECT_REPO" status --porcelain=v1)
+if printf '{"contract":"agent-work-policy/agent-work-policy","version":1,"action":"inspect","repo":"%s","output_to":"/tmp/out.yml"}\n' "$DIRECT_REPO" \
+    | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-invalid.json" 2>/dev/null; then
+  fail "公開entryが旧output_toを受理している"
+elif jq -e '.status=="failed" and .reason=="invalid_input" and (.workspace|keys|length)==5' "$TMP_ROOT/direct-invalid.json" >/dev/null \
+    && [ "$(git -C "$DIRECT_REPO" status --porcelain=v1)" = "$direct_before" ]; then
+  pass "公開entryが旧output_toを操作前に拒否しworkspace schemaを維持"
+else
+  fail "公開entryの旧output_to拒否結果"
+fi
+for bad in '"action":"verify"' '"action":"inspect","approved":true' '"action":"push","title":"t"' '"contract":"grill/grill","action":"inspect"'; do
+  if printf '{"contract":"agent-work-policy/agent-work-policy","version":1,%s,"repo":"%s"}\n' "$bad" "$DIRECT_REPO" \
+      | sed 's/"contract":"agent-work-policy\/agent-work-policy","version":1,"contract"/"version":1,"contract"/' \
+      | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-bad.json" 2>/dev/null; then
+    fail "契約違反の入力を受理している: $bad"
+  elif jq -e '.status=="failed" and .reason=="invalid_input"' "$TMP_ROOT/direct-bad.json" >/dev/null; then
+    pass "契約違反の入力を操作前に拒否する: $bad"
   else
-    fail "$runtime playbook resolution"
+    fail "契約違反の入力の拒否理由が invalid_input でない: $bad"
   fi
 done
 
-# ── 5.1 契約入力の入口 E1（prepare.sh --input） ────────────────────────
-# **CONTRACT.md §1 E1 / §2 を実際に通す。** 合成configではなく本番の経路で、
-# 契約入力が解決済みYAMLの .input に載り、契約違反の入力がexit 2で止まることを見る。
-mkdir -p "$TMP_ROOT/io/repo"
-printf 'body\n' > "$TMP_ROOT/io/body.md"
-cat > "$TMP_ROOT/io/input.yml" <<YML
-contract: agent-work-policy/agent-work-policy
-version: 1
-action: pull-request
-repo: $TMP_ROOT/io/repo
-approved: false
-title: "取消の締切を出荷日基準へ"
-body_file: $TMP_ROOT/io/body.md
-output_to: $TMP_ROOT/io/out.yml
-YML
-if entry_cfg=$(XDG_CONFIG_HOME="$TMP_ROOT/config" bash "$PB/scripts/prepare.sh" "$ROOT" \
-    --input="$TMP_ROOT/io/input.yml" 2> "$TMP_ROOT/io/entry.err"); then
-  if yq -o=json -I=0 '.' "$entry_cfg" | jq -e '. as $c
-      | $c.input.contract=="agent-work-policy/agent-work-policy" and $c.input.version==1
-      and $c.input.action=="pull-request"
-      and ($c.input.repo|startswith("/")) and ($c.input.output_to|startswith("/"))
-      and ($c.playbook.contract.actions|index($c.input.action)!=null)' >/dev/null; then
-    pass "prepare.sh --input が解決済みYAMLの .input へ契約入力を載せる"
-  else
-    fail "解決済みYAMLの .input が契約入力になっていない"
-  fi
-  python3 "$PB/scripts/run-config.py" cleanup --config "$entry_cfg" >/dev/null 2>&1 \
-    && pass "実行設定の後始末を自分で行える" || fail "実行設定の後始末"
+# gateは操作前に止まり、内部contextを承認対象objectとして直接返す。
+printf 'change\n' >> "$DIRECT_REPO/tracked.txt"
+printf '{"contract":"agent-work-policy/agent-work-policy","version":1,"action":"commit","repo":"%s","paths":["tracked.txt"],"message":"test"}\n' "$DIRECT_REPO" \
+  | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-gate.json" 2>/dev/null || direct_gate_code=$?
+if [ "${direct_gate_code:-0}" -eq 3 ] \
+  && jq -e '.status=="waiting_for_human" and .gate_state=="waiting_for_human"
+      and .approval_target.gate=="before_commit" and .approval_target.paths==["tracked.txt"]
+      and (.operation_result|type)=="object" and .reason==""' "$TMP_ROOT/direct-gate.json" >/dev/null \
+  && git -C "$DIRECT_REPO" diff --cached --quiet; then
+  pass "公開entryがgate前に停止しapproval_targetを直接返す"
 else
-  fail "prepare.sh --input が通らない: $(head -3 "$TMP_ROOT/io/entry.err")"
-fi
-# ── 入口hook validate-input.sh：契約固有schemaは入口で止まる ──────────────
-# **共通resolverは contract / version / action / output_to しか見ない。** actionごとの
-# 必須キー・そのactionが使わないキー・値の形を入口で止めるのはこのhookだけである。
-vinput="$PB/scripts/validate-input.sh"
-if bash "$vinput" "$TMP_ROOT/io/input.yml" > "$TMP_ROOT/io/hook.out" 2> "$TMP_ROOT/io/hook.err" \
-  && [ ! -s "$TMP_ROOT/io/hook.out" ]; then
-  pass "入口hookが契約どおりの入力を受理し、stdoutを使わない"
-else
-  fail "入口hookが契約どおりの入力を拒否する、またはstdoutを使う: $(head -1 "$TMP_ROOT/io/hook.err")"
-fi
-# 追加入力の要らないactionと、追加入力のあるactionの両方を通す。
-hook_accept() { # hook_accept <名前> <入力YAML>
-  local name="$1" dir="$TMP_ROOT/io/ok-$1"
-  mkdir -p "$dir"; printf '%s\n' "$2" > "$dir/input.yml"
-  bash "$vinput" "$dir/input.yml" >/dev/null 2> "$dir/err" \
-    && pass "入口hookが受理する: $name" \
-    || fail "入口hookが正しい入力を拒否する: $name ($(head -1 "$dir/err"))"
-}
-# **inspectは追加入力を取らないread-onlyの照会。** gateが無いので approved も取らない。
-hook_accept inspect-no-extra "contract: agent-work-policy/agent-work-policy
-version: 1
-action: inspect
-repo: $TMP_ROOT/io/repo
-output_to: $TMP_ROOT/io/out.yml"
-hook_accept push-no-extra "contract: agent-work-policy/agent-work-policy
-version: 1
-action: push
-repo: $TMP_ROOT/io/repo
-approved: true
-output_to: $TMP_ROOT/io/out.yml"
-hook_accept commit-with-paths "contract: agent-work-policy/agent-work-policy
-version: 1
-action: commit
-repo: $TMP_ROOT/io/repo
-approved: false
-paths: [src/order/cancel.py]
-message: 取消の締切を出荷日基準へ揃える
-output_to: $TMP_ROOT/io/out.yml"
-hook_accept merge-with-pr "contract: agent-work-policy/agent-work-policy
-version: 1
-action: merge
-repo: $TMP_ROOT/io/repo
-approved: true
-pr: 1234
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject() { # hook_reject <名前> <入力YAML>
-  local name="$1" dir="$TMP_ROOT/io/hook-$1"
-  mkdir -p "$dir"; printf '%s\n' "$2" > "$dir/input.yml"
-  if bash "$vinput" "$dir/input.yml" >/dev/null 2> "$dir/err"; then
-    fail "契約違反の入力を入口hookが受け入れている: $name"
-  elif ! rg -N '^\[error:input-schema\] ' "$dir/err" >/dev/null; then
-    fail "入口hookの診断が [error:input-schema] key=value でない: $name ($(head -1 "$dir/err"))"
-  elif [ "$(wc -l < "$dir/err")" -ne 1 ]; then
-    fail "入口hookの診断が1行でない: $name"
-  elif XDG_CONFIG_HOME="$TMP_ROOT/config" bash "$PB/scripts/prepare.sh" "$ROOT" \
-      --input="$dir/input.yml" >/dev/null 2> "$dir/e1.err"; then
-    fail "契約違反の入力をE1が受け入れている: $name"
-  elif rg -NF '[error:input-schema]' "$dir/e1.err" >/dev/null; then
-    pass "契約違反の入力を入口hookとE1が拒否する: $name"
-  else
-    fail "E1が契約固有schema違反を期待した理由で拒否できない: $name ($(head -1 "$dir/e1.err"))"
-  fi
-}
-hook_reject inspect-approved "contract: agent-work-policy/agent-work-policy
-version: 1
-action: inspect
-repo: $TMP_ROOT/io/repo
-approved: true
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject inspect-branch "contract: agent-work-policy/agent-work-policy
-version: 1
-action: inspect
-repo: $TMP_ROOT/io/repo
-branch: agent/x
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject missing-required "contract: agent-work-policy/agent-work-policy
-version: 1
-action: commit
-repo: $TMP_ROOT/io/repo
-paths: [src/a.py]
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject key-for-other-action "contract: agent-work-policy/agent-work-policy
-version: 1
-action: push
-repo: $TMP_ROOT/io/repo
-title: 取消の締切を出荷日基準へ
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject unknown-key "contract: agent-work-policy/agent-work-policy
-version: 1
-action: push
-repo: $TMP_ROOT/io/repo
-verify: true
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject approved-not-bool "contract: agent-work-policy/agent-work-policy
-version: 1
-action: push
-repo: $TMP_ROOT/io/repo
-approved: \"true\"
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject pr-not-int "contract: agent-work-policy/agent-work-policy
-version: 1
-action: merge
-repo: $TMP_ROOT/io/repo
-pr: \"1234\"
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject paths-escape "contract: agent-work-policy/agent-work-policy
-version: 1
-action: commit
-repo: $TMP_ROOT/io/repo
-paths: [../outside.py]
-message: m
-output_to: $TMP_ROOT/io/out.yml"
-hook_reject body-file-missing "contract: agent-work-policy/agent-work-policy
-version: 1
-action: pull-request
-repo: $TMP_ROOT/io/repo
-title: t
-body_file: $TMP_ROOT/io/absent.md
-output_to: $TMP_ROOT/io/out.yml"
-# **祖先にsymlinkを含む入力pathを拒否しない。** macOS既定のTMPDIRがその形なので、
-# 拒否すると消費側が素直に書いた入力が必ず落ちる。output_to は正規化されて載る。
-mkdir -p "$TMP_ROOT/io/real"; ln -s "$TMP_ROOT/io/real" "$TMP_ROOT/io/linked"
-sed "s|^output_to: .*|output_to: $TMP_ROOT/io/linked/out.yml|" "$TMP_ROOT/io/input.yml" \
-  > "$TMP_ROOT/io/linked/input.yml"
-real_io=$(cd "$TMP_ROOT/io/real" && pwd -P)
-if sym_cfg=$(XDG_CONFIG_HOME="$TMP_ROOT/config" bash "$PB/scripts/prepare.sh" "$ROOT" \
-    --input="$TMP_ROOT/io/linked/input.yml" 2> "$TMP_ROOT/io/sym.err") \
-  && yq -o=json -I=0 '.' "$sym_cfg" | jq -e --arg real "$real_io" '.input.output_to == ($real + "/out.yml")' >/dev/null; then
-  pass "祖先がsymlinkの入力pathを受け、output_toを正規化して載せる"
-  python3 "$PB/scripts/run-config.py" cleanup --config "$sym_cfg" >/dev/null 2>&1
-else
-  fail "祖先にsymlinkを含む入力pathをE1が拒否する: $(head -1 "$TMP_ROOT/io/sym.err")"
+  fail "公開entryのgate停止と承認対象"
 fi
 
-reject_input() { # reject_input <名前> <期待コード片> <sed式>
-  local name="$1" expected="$2" edit="$3" dir="$TMP_ROOT/io/neg-$1"
-  mkdir -p "$dir"
-  sed "$edit" "$TMP_ROOT/io/input.yml" > "$dir/input.yml"
-  if XDG_CONFIG_HOME="$TMP_ROOT/config" bash "$PB/scripts/prepare.sh" "$ROOT" \
-      --input="$dir/input.yml" >/dev/null 2> "$dir/err"; then
-    fail "契約違反の入力を入口が受け入れている: $name"
-  elif rg -NF "$expected" "$dir/err" >/dev/null; then
-    pass "契約違反の入力を入口が拒否する: $name"
-  else
-    fail "契約違反の入力を期待した理由で拒否できない: $name ($(head -1 "$dir/err"))"
-  fi
-}
-reject_input "unknown-action" "[error:input-capability-unsupported]" 's|^action: .*|action: verify|'
-reject_input "wrong-contract" "[error:input-contract-mismatch]" 's|^contract: .*|contract: grill/grill|'
-reject_input "relative-output" "[error:input-output-unwritable]" 's|^output_to: .*|output_to: ./out.yml|'
-
-# ── 6. 負の試験 ────────────────────────────────────────────────────────
-COPY="$TMP_ROOT/copy"
-mkdir -p "$COPY"
-cp -R "$ROOT/plugins" "$ROOT/.claude-plugin" "$ROOT/.agents" "$COPY/"
-COPY_PB="$COPY/plugins/playbooks/automation/agent-work-policy"
-cp "$COPY_PB/playbook.yml" "$TMP_ROOT/base.yml"
-negative() {
-  local name="$1" expected="$2"
-  local err="$TMP_ROOT/negative-$name.err"
-  if XDG_CONFIG_HOME="$TMP_ROOT/config" HARNESS_PLUGIN_RUNTIME=codex bash "$COPY_PB/scripts/resolve.sh" "$TMP_ROOT/repo" >/dev/null 2> "$err"; then
-    fail "負例($name)を拒否できない"
-  elif rg -NF "$expected" "$err" >/dev/null; then
-    pass "負例($name)を拒否する"
-  else
-    fail "負例($name)を期待した理由で拒否できない"
-  fi
-  cp "$TMP_ROOT/base.yml" "$COPY_PB/playbook.yml"
-}
-yq -o=json -I=0 '.' "$TMP_ROOT/base.yml" | jq '.requires[0].version="1.0.0"' | yq -P > "$COPY_PB/playbook.yml"
-negative "requires-version-pin" "playbookのschema"
-yq -o=json -I=0 '.' "$TMP_ROOT/base.yml" | jq '.requires[0].plugin="absent-internal-plugin"' | yq -P > "$COPY_PB/playbook.yml"
-negative "unresolvable-dependency" "[error:dependency-"
-# 工程が指すskillの実在検査はresolverが持つ。固有validatorを外して単独で確かめる。
-cp "$COPY_PB/scripts/validate-config.sh" "$TMP_ROOT/validate-config.sh"
-sed 's/apply-work-policy/unknown-step-skill/' "$TMP_ROOT/validate-config.sh" > "$COPY_PB/scripts/validate-config.sh"
-yq -o=json -I=0 '.' "$TMP_ROOT/base.yml" | jq '.steps[0].skill="unknown-step-skill"' | yq -P > "$COPY_PB/playbook.yml"
-negative "unknown-skill" "steps が指すスキルが requires のプラグインに無い: unknown-step-skill"
-cp "$TMP_ROOT/validate-config.sh" "$COPY_PB/scripts/validate-config.sh"
-yq -o=json -I=0 '.' "$TMP_ROOT/base.yml" | jq '.contract.actions=["pull_request"]' | yq -P > "$COPY_PB/playbook.yml"
-negative "action-not-kebab-case" "contract.actionsは非空のkebab-case文字列配列にする"
-yq -o=json -I=0 '.' "$TMP_ROOT/base.yml" | jq '.steps=[.steps[0],(.steps[0]|.id="apply2")]' | yq -P > "$COPY_PB/playbook.yml"
-negative "multiple-actions-per-call" "1呼び出し1action"
-yq -o=json -I=0 '.' "$TMP_ROOT/base.yml" | jq '.contract.contract_version=2' | yq -P > "$COPY_PB/playbook.yml"
-negative "contract-version" "契約IDと契約版はagent-work-policy/agent-work-policyのv1に固定する"
-
-# 外部pluginが内部skillを直接掴めないこと（公開面はplaybookだけ）
-if [ -f "$COPY/plugins/skills/automation/work-policy-control/playbook.yml" ]; then
-  fail "内部pluginがplaybook面を公開している"
+# permission拒否は承認待ちへ変えず、外部CLIへ進まない。
+printf '{"contract":"agent-work-policy/agent-work-policy","version":1,"action":"merge","repo":"%s","pr":1}\n' "$DIRECT_REPO" \
+  | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-denied.json" 2>/dev/null || direct_denied_code=$?
+if [ "${direct_denied_code:-0}" -eq 3 ] \
+  && jq -e '.status=="failed" and .gate_state=="denied" and .reason=="permission_denied"
+      and (has("approval_target")|not)' "$TMP_ROOT/direct-denied.json" >/dev/null; then
+  pass "公開entryがpermission拒否を承認質問へ変えない"
 else
-  pass "内部pluginは公開playbook面を持たない"
+  fail "公開entryのpermission拒否"
 fi
 
-# ── 6.05 inspect は read-only の照会である ───────────────────────────────
-# **planと役割を混ぜない。** planは新規作業の開始判定なので既存branchやdirtyで止まる。
-# inspectは現況を返すだけなので、同じ状況で止まってはならない。
-INTERNAL_SCRIPTS="$INTERNAL/scripts"
+# policy schema違反（未知key / 欠落key / 型違い / fast-forward制約）は操作前に error と診断で止まる。
+for edit in '.extra = 1' 'del(.git.remote)' '.permissions.commit = "yes"' '.merge.method = "fast-forward"' '.instructions.execution.directive = "x"'; do
+  cp "$POLICY_EXAMPLE" "$DIRECT_REPO/.harness-plugins/agent-work-policy.config.yml"
+  yq -i "$edit" "$DIRECT_REPO/.harness-plugins/agent-work-policy.config.yml"
+  if printf '{"contract":"agent-work-policy/agent-work-policy","version":1,"action":"inspect","repo":"%s"}\n' "$DIRECT_REPO" \
+      | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-schema.json" 2>/dev/null; then
+    fail "schema違反のpolicyを受理している: $edit"
+  elif jq -e '.status=="failed" and .reason=="error" and (.detail.error|type)=="string"' "$TMP_ROOT/direct-schema.json" >/dev/null; then
+    pass "schema違反のpolicyを操作前に診断付きで拒否する: $edit"
+  else
+    fail "schema違反のpolicyの拒否結果: $edit $(cat "$TMP_ROOT/direct-schema.json")"
+  fi
+done
+cp "$POLICY_EXAMPLE" "$DIRECT_REPO/.harness-plugins/agent-work-policy.config.yml"
+
+# 別repositoryのpolicyを流用できない（束縛）。
+OTHER_REPO="$TMP_ROOT/other-repo"
+mkdir -p "$OTHER_REPO"; git -C "$OTHER_REPO" init -q -b main
+if python3 "$ENTRY/scripts/control.py" inspect --config "$DIRECT_REPO/.harness-plugins/agent-work-policy.config.yml" --repo "$OTHER_REPO" > "$TMP_ROOT/bound.json" 2>/dev/null; then
+  fail "別repositoryのpolicyで操作できてしまう"
+elif jq -e '.error=="設定と対象repositoryが一致しない"' "$TMP_ROOT/bound.json" >/dev/null; then
+  pass "policyは置かれたrepositoryへ束縛される"
+else
+  fail "policy束縛の診断: $(cat "$TMP_ROOT/bound.json")"
+fi
+
+if python3 - "$PUBLIC_ENTRY" "$ENTRY/scripts/control.py" <<'PY'
+import contextlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import subprocess
+import sys
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("public_invoke", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+control_spec = importlib.util.spec_from_file_location("work_policy_control", sys.argv[2])
+control = importlib.util.module_from_spec(control_spec)
+control_spec.loader.exec_module(control)
+cfg = {"pull_request": {"draft": True}}
+
+assert module.map_completed_operation("pull-request", {
+    "status": "created", "url": "https://github.com/acme/app/pull/42",
+}, cfg) == {"pull_request": 42, "url": "https://github.com/acme/app/pull/42", "draft": True}
+assert module.map_completed_operation("merge-readiness", {
+    "status": "not_ready", "pr": 42, "reasons": ["checks", "approvals"],
+}, cfg) == {"pull_request": 42, "ready": False, "unmet": ["checks", "approvals"]}
+assert module.is_completed_result("merge-readiness", "not_ready", 3)
+assert not module.is_completed_result("merge-readiness", "not_ready", 9)
+assert module.is_completed_result("merge-readiness", "ready", 0)
+assert not module.is_completed_result("merge-readiness", "ready", 9)
+assert not module.is_completed_result("inspect", [], 0)
+assert not module.is_completed_result("inspect", {}, 0)
+
+for payload in (
+    {"contract": module.CONTRACT, "version": 1, "action": [], "repo": "/"},
+    {"contract": module.CONTRACT, "version": 1, "action": "commit", "repo": "/", "paths": {"a": 1}, "message": "m"},
+    *(
+        {"contract": module.CONTRACT, "version": 1, "action": "commit", "repo": "/", "paths": [f"a{separator}b"], "message": "m"}
+        for separator in ("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", " ", " ")
+    ),
+    {"contract": module.CONTRACT, "version": 1, "action": "commit", "repo": "/", "paths": [" leading"], "message": "m"},
+    {"contract": module.CONTRACT, "version": 1, "action": "commit", "repo": "/", "paths": ["trailing "], "message": "m"},
+):
+    output = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(output):
+            module.validate(payload)
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("invalid input was accepted")
+    assert json.loads(output.getvalue())["reason"] == "invalid_input"
+
+exact_paths = ["ordinary space.txt", "internal\ttab.txt", "src/a.py", "src/b.py"]
+validated = module.validate({
+    "contract": module.CONTRACT, "version": 1, "action": "commit", "repo": "/",
+    "paths": exact_paths, "message": "m",
+})
+assert validated["paths"] == exact_paths
+
+code, value = module.read_json([sys.executable, "-c", "print('not-json')"])
+assert code != 0 and value["reason"] == "invalid_internal_result"
+for invalid_status in ([], {}):
+    code, value = module.normalize_internal_operation(0, {"status": invalid_status})
+    assert code != 0 and value == {"status": "failed", "reason": "invalid_internal_result"}
+code, value = module.normalize_internal_operation(2, {"error": "policy設定の型が不正", "key": "permissions.commit"})
+assert code == 3 and value["status"] == "failed" and value["reason"] == "error" and value["detail"]["key"] == "permissions.commit"
+
+# policy schema: 正例・反例・境界例
+def policy():
+    return {
+        "version": 1,
+        "workspace": {"use_worktree": False, "require_clean_start": True, "base_branch": "main", "branch_prefix": "agent/", "worktree_root": ""},
+        "git": {"remote": "origin"},
+        "permissions": {"commit": True, "push": True, "pull_request": True, "merge": False},
+        "gates": {"before_commit": True, "before_push": True, "before_pull_request": True, "before_merge": True},
+        "verification": {"commands": ["git diff --check"]},
+        "pull_request": {"draft": True},
+        "merge": {"method": "squash", "delete_branch": False, "delete_worktree": False,
+                  "readiness": {"min_approvals": 1, "require_checks_passed": True, "require_no_unresolved_threads": True}},
+    }
+def rejects(cfg):
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            control.validate_policy(cfg, "fixture")
+    except SystemExit as exc:
+        assert exc.code == 2, exc.code
+        return json.loads(out.getvalue())["error"]
+    raise AssertionError("invalid policy accepted")
+control.validate_policy(policy(), "fixture")
+good = policy(); good["workspace"]["worktree_root"] = ""; good["merge"]["readiness"]["min_approvals"] = 0
+control.validate_policy(good, "fixture")  # 境界例: 空文字とmin_approvals 0 は有効
+bad = policy(); bad["permissions"]["merge"] = 1; assert "型が不正" in rejects(bad)  # 境界例: 1 は boolean ではない
+bad = policy(); bad["merge"]["readiness"]["min_approvals"] = True; assert "型が不正" in rejects(bad)
+bad = policy(); del bad["gates"]["before_merge"]; assert "一致しない" in rejects(bad)
+bad = policy(); bad["workspace"]["extra"] = 1; assert "一致しない" in rejects(bad)
+bad = policy(); bad["instructions"] = {"execution": {"directive": "x"}}; assert "一致しない" in rejects(bad)  # 反例: agent向け指示文keyは未知keyとして拒否
+bad = policy(); bad["version"] = 2; assert "version" in rejects(bad)
+bad = policy(); bad["merge"]["method"] = "fast-forward"; assert "fast-forward" in rejects(bad)
+bad = policy(); bad["merge"]["delete_worktree"] = True; assert "delete_worktree" in rejects(bad)
+bad = policy(); bad["verification"]["commands"] = [""]; assert "型が不正" in rejects(bad)
+PY
+then
+  pass "公開結果のaction別写像、型境界、内部JSON不正、policy schemaの正例・反例・境界例"
+else
+  fail "公開結果写像またはpolicy schemaの単体検査"
+fi
+
+# ── 5. inspect は read-only の照会である ─────────────────────────────────
 inspect_repo="$TMP_ROOT/inspect-repo"
-mkdir -p "$inspect_repo"
+mkdir -p "$inspect_repo/.harness-plugins"
+cp "$POLICY_EXAMPLE" "$inspect_repo/.harness-plugins/agent-work-policy.config.yml"
 git -C "$inspect_repo" init -q
 git -C "$inspect_repo" symbolic-ref HEAD refs/heads/main
 printf 'a\n' > "$inspect_repo/a.txt"
@@ -440,169 +400,35 @@ git -C "$inspect_repo" add a.txt
 git -C "$inspect_repo" -c user.email=t@example.invalid -c user.name=t commit -qm init
 git -C "$inspect_repo" switch -qc agent/existing
 printf 'dirty\n' > "$inspect_repo/b.txt"
-if inspect_cfg=$(XDG_CONFIG_HOME="$TMP_ROOT/config" bash "$INTERNAL_SCRIPTS/prepare.sh" "$inspect_repo" 2>/dev/null); then
-  if python3 "$INTERNAL_SCRIPTS/control.py" inspect --config "$inspect_cfg" --repo "$inspect_repo" \
-      > "$TMP_ROOT/inspect.json" 2> "$TMP_ROOT/inspect.err" \
-    && jq -e '.status=="inspected" and .clean==false and .branch=="agent/existing"
-              and .base_branch_exists==true and (has("worktree")) and (has("pull_request"))
-              and (.remote|type=="string") and (.draft|type=="boolean")' "$TMP_ROOT/inspect.json" >/dev/null; then
-    pass "inspectは既存branch・dirtyでも止まらず現況を返す"
-  else
-    fail "inspectが現況を返さない: $(head -1 "$TMP_ROOT/inspect.err")"
-  fi
-  # 同じ状況で plan は止まる。役割が分かれていることを見る。
-  if python3 "$INTERNAL_SCRIPTS/control.py" plan --config "$inspect_cfg" --repo "$inspect_repo" \
-      --branch agent/new >/dev/null 2>&1; then
-    fail "planが汚れたworking treeで止まらない（inspectと役割が同じになっている）"
-  else
-    pass "planは同じ状況で止まる（inspectと役割が分かれている）"
-  fi
-  rm -f "$inspect_cfg"
+inspect_cfg="$inspect_repo/.harness-plugins/agent-work-policy.config.yml"
+if python3 "$ENTRY/scripts/control.py" inspect --config "$inspect_cfg" --repo "$inspect_repo" \
+    > "$TMP_ROOT/inspect.json" 2> "$TMP_ROOT/inspect.err" \
+  && jq -e '.status=="inspected" and .clean==false and .branch=="agent/existing"
+            and .base_branch_exists==true and (has("worktree")) and (has("pull_request"))
+            and (.remote|type=="string") and (.draft|type=="boolean")' "$TMP_ROOT/inspect.json" >/dev/null; then
+  pass "inspectは既存branch・dirtyでも止まらず現況を返す"
 else
-  fail "inspect試験用の実行設定を解決できない"
+  fail "inspectが現況を返さない: $(head -1 "$TMP_ROOT/inspect.err")"
+fi
+if python3 "$ENTRY/scripts/control.py" plan --config "$inspect_cfg" --repo "$inspect_repo" --branch agent/new >/dev/null 2>&1; then
+  fail "planが汚れたworking treeで止まらない（inspectと役割が同じになっている）"
+else
+  pass "planは同じ状況で止まる（inspectと役割が分かれている）"
 fi
 
-# ── 6.1 消費側から見た公開面 — 実際の配布物に対して解決する ────────────────
-# fixtureは「agent-work-policyを外部依存として要求する別marketplaceのplaybook」。
-# **配布物 plugins/ をそのままinstalled-cacheへ写す。** 手書きのbare manifestを置くと
-# metadata.harness が欠けて external-dependency-no-playbook になり、実体と乖離する。
-consumer="$TMP_ROOT/consumer"
-cpb="$consumer/plugins/playbooks/probe/probe"
-mkdir -p "$cpb/scripts" "$cpb/.claude-plugin" "$cpb/.codex-plugin" \
-  "$consumer/plugins/.claude-plugin" "$consumer/plugins/.codex-plugin"
-git -C "$consumer" init -q
-# **版はmanifestから読む。** ここに版を直書きすると、release後にfixtureが実体から乖離する。
-package_version=$(jq -r '.version' "$ROOT/plugins/.claude-plugin/plugin.json")
-cache="$cpb/.harness-plugin-test-cache/agent-work-policy/agent-work-policy/${package_version}"
-mkdir -p "$(dirname "$cache")"
-cp -R "$ROOT/plugins" "$cache"
-for runtime in claude codex; do
-  cat > "$cpb/.${runtime}-plugin/plugin.json" <<'JSON'
-{"name":"probe","version":"1.0.0","description":"fixture","skills":"./","metadata":{"harness":{"contractVersion":1}}}
-JSON
-  cat > "$consumer/plugins/.${runtime}-plugin/plugin.json" <<'JSON'
-{"name":"probe","version":"1.0.0","description":"fixture","skills":["./playbooks/probe/probe"],
- "metadata":{"harness":{"installationSurface":"playbook-package","marketplace":"probe",
- "entryRoot":"./playbooks/probe/probe","playbooks":{"probe":"./playbooks/probe/probe"},
- "internalPlugins":{},"contractVersion":1,
- "implements":[{"id":"probe/probe","version":1,"kind":"playbook","playbook":"probe"}]}}}
-JSON
-done
-printf -- '---\nname: probe\ndescription: fixture\n---\nfixture\n' > "$cpb/SKILL.md"
-cp "$ROOT/shared/prepare.sh" "$cpb/scripts/prepare.sh"
-cp "$ROOT/shared/run-config.py" "$cpb/scripts/run-config.py"
-cp "$ROOT/shared/playbook/resolve.sh" "$cpb/scripts/resolve.sh"
-cp "$ROOT/shared/playbook/resolve-dependency.py" "$cpb/scripts/resolve-dependency.py"
-cp "$ROOT/shared/playbook/state.py" "$cpb/scripts/state.py"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$cpb/scripts/validate-config.sh"
-chmod 755 "$cpb/scripts"/*
-probe_playbook() { # probe_playbook <requires plugin> <step種別> [action]
-  cat > "$cpb/playbook.yml" <<YML
-version: 2
-name: probe
-description: fixture
-instructions:
-  execution:
-    directive: fixture
-requires:
-  - {plugin: $1, marketplace: agent-work-policy}
-steps:
-  - id: apply
-    $2: $1
-    input:
-      action: ${3:-pull-request}
-    purpose: fixture
-    provides: [action_result]
-YML
-}
-probe_run() { HARNESS_PLUGIN_CACHE_ROOT="$cpb/.harness-plugin-test-cache" \
-  XDG_CONFIG_HOME="$TMP_ROOT/config" bash "$cpb/scripts/resolve.sh" "$consumer" 2> "$TMP_ROOT/probe.err"; }
-
-# (a) 公開playbookは外部から解決でき、公開面は入口SKILL.md 1枚だけである。
-probe_playbook agent-work-policy playbook
-if ! probe_run > "$TMP_ROOT/probe.yml"; then
-  fail "配布物のagent-work-policyを外部依存として解決できない: $(head -3 "$TMP_ROOT/probe.err")"
-else
-  entry_skill_name=$(rg -N -m1 '^name: (.+)$' -r '$1' "$PB/SKILL.md")
-  # **契約面は entry と entry_skill である。** entry は入口SKILL.mdの実path、
-  # entry_skill はその frontmatter name（表示用。名前で分岐しない）。
-  if yq -o=json -I=0 '.' "$TMP_ROOT/probe.yml" | jq -e --arg skill "$entry_skill_name" '
-      .deps["agent-work-policy"].dependency_scope=="external"
-      and .deps["agent-work-policy"].contract=="agent-work-policy/agent-work-policy"
-      and ((.deps["agent-work-policy"].implements
-            | map(select(.id=="agent-work-policy/agent-work-policy" and .version==1 and .kind=="playbook"))
-            | length)==1)
-      and .deps["agent-work-policy"].entry_skill==$skill
-      and (.deps["agent-work-policy"].entry|test("/playbooks/automation/agent-work-policy/SKILL.md$"))' >/dev/null; then
-    pass "外部から見える公開面は entry（入口SKILL.md）1枚、entry_skill=${entry_skill_name}"
-  else
-    fail "外部から見えるagent-work-policyの公開面（entry / entry_skill）が契約どおりでない"
-  fi
-  entry_ok_probe=1
-  root=$(yq -er '.deps["agent-work-policy"].root' "$TMP_ROOT/probe.yml")
-  for entry in playbook.yml SKILL.md scripts/resolve.sh scripts/prepare.sh; do
-    [ -f "$root/$entry" ] || entry_ok_probe=0
-  done
-  [ "$entry_ok_probe" -eq 1 ] && pass "公開入口4点が解決先に揃っている" || fail "公開入口4点が解決先に無い"
-fi
-
-# (b) 内部pluginを外部から指定しても解決しない。
-probe_playbook work-policy-control playbook
-if probe_run >/dev/null; then
-  fail "外部repositoryから内部plugin（work-policy-control）が解決できてしまう"
-elif rg -NF 'dependency-' "$TMP_ROOT/probe.err" >/dev/null; then
-  pass "内部pluginの外部指定を拒否する"
-else
-  fail "内部pluginの外部指定を期待した理由で拒否できない: $(head -1 "$TMP_ROOT/probe.err")"
-fi
-
-# (c) 外部依存を skill: で掴めない（最上位規則の機械的強制）。
-# **公開skill名（入口SKILL.mdのname）で掴もうとしても落ちる。** playbook名で指すと
-# 「requiresのpluginに無いskill」で落ちてしまい、この規則そのものを試験できない。
-cat > "$cpb/playbook.yml" <<YML
-version: 2
-name: probe
-description: fixture
-instructions:
-  execution:
-    directive: fixture
-requires:
-  - {plugin: agent-work-policy, marketplace: agent-work-policy}
-steps:
-  - id: apply
-    skill: $(rg -N -m1 '^name: (.+)$' -r '$1' "$PB/SKILL.md")
-    purpose: fixture
-    provides: [action_result]
-YML
-if probe_run >/dev/null; then
-  fail "外部依存のagent-work-policyを skill: step で呼べてしまう"
-elif rg -NF 'external-dependency-skill' "$TMP_ROOT/probe.err" >/dev/null; then
-  pass "外部依存の skill: 参照を拒否する"
-else
-  fail "外部skill参照を期待した理由で拒否できない: $(head -1 "$TMP_ROOT/probe.err")"
-fi
-
-# (d) 宣言に無いactionを steps[].input で要求したら、解決の時点で止まる。
-probe_playbook agent-work-policy playbook verify
-if probe_run >/dev/null; then
-  fail "implementsに無いactionを steps[].input で要求できてしまう"
-elif rg -NF 'binding-capability-unsupported' "$TMP_ROOT/probe.err" >/dev/null; then
-  pass "implementsに無いactionの要求を拒否する"
-else
-  fail "未宣言actionの要求を期待した理由で拒否できない: $(head -1 "$TMP_ROOT/probe.err")"
-fi
-
-# ── 7. 構文と既存の契約試験 ────────────────────────────────────────────
+# ── 6. 構文と既存の契約試験 ────────────────────────────────────────────
 syntax_failed=0
-while IFS= read -r script; do bash -n "$script" || syntax_failed=1; done < <(find "$ROOT" -type f -name '*.sh' | sort)
+while IFS= read -r script; do bash -n "$script" || syntax_failed=1; done < <(find "$ROOT/scripts" "$ROOT/tests" -name '*.sh' -type f | sort)
 [ "$syntax_failed" -eq 0 ] && pass "shell構文" || fail "shell構文"
 python_failed=0
-while IFS= read -r script; do PYTHONPYCACHEPREFIX="$TMP_ROOT/pycache" python3 -m py_compile "$script" || python_failed=1; done < <(find "$ROOT" -type f -name '*.py' | sort)
+while IFS= read -r script; do python3 -m py_compile "$script" || python_failed=1; done < <(find "$ENTRY/scripts" -name '*.py' -type f | sort)
 [ "$python_failed" -eq 0 ] && pass "Python構文" || fail "Python構文"
-
 bash "$ROOT/tests/publication-authority-contract.sh" && pass "公開操作の停止契約" || fail "公開操作の停止契約"
 bash "$ROOT/tests/license-contract.sh" && pass "LICENSE契約" || fail "LICENSE契約"
 bash "$ROOT/tests/secret-scanning-contract.sh" && pass "secret scanning契約" || fail "secret scanning契約"
 
-printf '\nValidation: %d passed, %d failed\n' "$passed" "$failed"
+symlink_count=$(find "$ROOT/plugins" -type l | wc -l | tr -d ' ')
+[ "$symlink_count" -eq 0 ] && pass "配布物にsymlinkなし" || fail "配布物にsymlinkがある"
+
+printf '%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
