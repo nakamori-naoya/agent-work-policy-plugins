@@ -35,7 +35,7 @@ policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` だけを
 
 ## 共通実装
 
-`shared/` と `scripts/` の保守tool（doctor / lint-consumer-contract / evaluate-skills / release / sync-runtime / test-hardening / validate-distribution）は、Product Planning repositoryの `shared/runtime-source` が正本である。個別に編集せず、`python3 scripts/sync-runtime.py --source <正本checkout>` で取り込む。
+保守tool（root契約の構造検査、回帰検査、消費側lint、release、eval）の正本は兄弟checkout `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools` の実在を確認してから呼び、無ければ止まる。
 
 ## 変更後
 

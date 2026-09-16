@@ -15,7 +15,6 @@ __pycache__/
 !/docs/
 !/plugins/
 !/scripts/
-!/shared/
 !/tests/
 !/AGENTS.md
 !/README.md
