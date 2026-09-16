@@ -4,6 +4,9 @@
 # policyの妥当性、承認対象の十分性、SKILL本文の判断基準の十分性は意味評価として残す。
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+# 保守toolの正本は兄弟checkoutの harness-tools。無ければ止まる（fixtureで代用しない）。
+TOOLS="$ROOT/../harness-tools/tools"
+[ -d "$TOOLS" ] || { echo "[error] 兄弟 checkout harness-tools が無い: $TOOLS" >&2; exit 2; }
 # **一時領域を正規形へ直さない。** macOS 既定の TMPDIR は /var/folders/... という
 # symlink 越しの path であり、契約入口はそれをそのまま受けなければならない（realpath正規化）。
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/agent-work-policy-validation.XXXXXX") || exit 2
@@ -454,6 +457,8 @@ while IFS= read -r script; do bash -n "$script" || syntax_failed=1; done < <(fin
 python_failed=0
 while IFS= read -r script; do python3 -m py_compile "$script" || python_failed=1; done < <(find "$ENTRY/scripts" -name '*.py' -type f | sort)
 [ "$python_failed" -eq 0 ] && pass "Python構文" || fail "Python構文"
+# repositoryの回帰検査（harness-tools）: CI workflowのSHA固定、公開入口の一意性、doctorの読み取り専用性
+python3 "$TOOLS/test-hardening.py" --repository "$ROOT" && pass "test-hardening --repository" || fail "test-hardening --repository"
 bash "$ROOT/tests/publication-authority-contract.sh" && pass "公開操作の停止契約" || fail "公開操作の停止契約"
 bash "$ROOT/tests/license-contract.sh" && pass "LICENSE契約" || fail "LICENSE契約"
 bash "$ROOT/tests/secret-scanning-contract.sh" && pass "secret scanning契約" || fail "secret scanning契約"
