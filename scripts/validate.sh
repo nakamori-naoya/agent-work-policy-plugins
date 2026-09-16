@@ -85,7 +85,7 @@ fi
 
 # ── 3. 公開入口: SKILL / playbook.yml / CONTRACT.md / scripts ─────────────
 entry_ok=1
-for required in playbook.yml SKILL.md CONTRACT.md scripts/invoke.py scripts/control.py references/settings.md references/operation-contract.md references/activation.md assets/policy.example.yml; do
+for required in playbook.yml SKILL.md CONTRACT.md scripts/invoke.py scripts/control.py scripts/config.py references/settings.md references/operation-contract.md references/activation.md assets/policy.example.yml; do
   [ -f "$ENTRY/$required" ] || entry_ok=0
 done
 [ "$(skill_frontmatter_name "$ENTRY/SKILL.md")" = "agent-work-policy" ] || entry_ok=0
@@ -107,10 +107,12 @@ if jq -e '
   and .contract.invocation=={"input":"object","output":"object","entry":"scripts/invoke.py"}
   and .contract.gate_states==["allowed","waiting_for_human","denied"]
   and .contract.statuses==["completed","waiting_for_human","failed"]
-  and (.steps|map(.id))==["build-input","invoke","report"]
-  and .steps[1].script=="scripts/invoke.py"
-  and (.steps[1].provides|sort)==(["approval_target","gate_state","operation_result","reason","status","workspace"]|sort)
-' <<<"$playbook_json" >/dev/null && [ -f "$ENTRY/$(jq -r '.steps[1].script' <<<"$playbook_json")" ]; then
+  and (.steps|map(.id))==["build-input","config","invoke","report"]
+  and .steps[1].script=="scripts/config.py"
+  and (.steps[1].provides|sort)==(["config_path","config_values"]|sort)
+  and .steps[2].script=="scripts/invoke.py"
+  and (.steps[2].provides|sort)==(["approval_target","gate_state","operation_result","reason","status","workspace"]|sort)
+' <<<"$playbook_json" >/dev/null && [ -f "$ENTRY/$(jq -r '.steps[1].script' <<<"$playbook_json")" ] && [ -f "$ENTRY/$(jq -r '.steps[2].script' <<<"$playbook_json")" ]; then
   pass "playbook.ymlの契約宣言と工程がentryへ接続"
 else
   fail "playbook.ymlの契約宣言"
@@ -168,7 +170,36 @@ else
   pass "旧runtime・旧内部名への参照が無い"
 fi
 scripts_found=$(find "$ENTRY/scripts" -type f -not -path "*/__pycache__/*" | sed "s#^$ENTRY/scripts/##" | sort | tr '\n' ' ')
-[ "$scripts_found" = "control.py invoke.py " ] && pass "入口scriptsはcontrol.pyとinvoke.pyだけ" || fail "入口scriptsに余分なfile: $scripts_found"
+[ "$scripts_found" = "config.py control.py invoke.py " ] && pass "入口scriptsはconfig.py・control.py・invoke.pyだけ" || fail "入口scriptsに余分なfile: $scripts_found"
+
+# ── 3.3 設定読み取りtool config.py check|read（D7の共通契約） ─────────────────
+# 正本: control.py の POLICY_FILE / POLICY_SCHEMA / validate_policy と共通契約（stdin不要、pathはtoolが固定、stdoutにJSON 1文書、失敗はexit 2と reason）。
+# 入力: `config.py check|read --repo <path>`。正規化: git rev-parse --show-toplevel で git root を解決し、<root>/.harness-plugins/agent-work-policy.config.yml を yq でJSON化する。
+# 合格述語: check は exit 0 と {"status":"ok","config":<絶対path>}、read は exit 0 と {"config","values"}（values は top-level key をそのまま）。
+#   失敗は exit 2 と {"error","config","reason"} で reason は policy_missing / schema_violation / not_a_git_repository のどれか。not_a_git_repository では config は null。
+# 正例: 記入例を置いた git repository（sub directory からでも可）。反例: file不在、key欠落、許容外の merge.method、yq で読めない file、git repository でない --repo。
+# 意味評価: policy の値が repository の運用に合うかは本文を読む。
+CONFIG_TOOL="$ENTRY/scripts/config.py"
+CONFIG_REPO="$TMP_ROOT/config-repo"
+mkdir -p "$CONFIG_REPO/.harness-plugins" "$CONFIG_REPO/sub" "$TMP_ROOT/config-nongit"
+git -C "$CONFIG_REPO" init -q
+cp "$POLICY_EXAMPLE" "$CONFIG_REPO/.harness-plugins/agent-work-policy.config.yml"
+config_ok=1
+out=$(python3 "$CONFIG_TOOL" check --repo "$CONFIG_REPO/sub") && jq -e --arg c "$(cd "$CONFIG_REPO" && pwd -P)/.harness-plugins/agent-work-policy.config.yml" '.=={"status":"ok","config":$c}' <<<"$out" >/dev/null || config_ok=0
+out=$(python3 "$CONFIG_TOOL" read --repo "$CONFIG_REPO") && jq -e '(keys|sort)==["config","values"] and .values.version==1' <<<"$out" >/dev/null || config_ok=0
+jq -e '(.values|keys|sort)==($ex|keys|sort)' --argjson ex "$(yq -o=json -I=0 '.' "$POLICY_EXAMPLE")" <<<"$out" >/dev/null || config_ok=0
+out=$(python3 "$CONFIG_TOOL" check --repo "$TMP_ROOT/config-nongit"); [ "$?" -eq 2 ] && jq -e '.reason=="not_a_git_repository" and .config==null' <<<"$out" >/dev/null || config_ok=0
+yq -i '.merge.method = "squash-and-pray"' "$CONFIG_REPO/.harness-plugins/agent-work-policy.config.yml"
+out=$(python3 "$CONFIG_TOOL" check --repo "$CONFIG_REPO"); [ "$?" -eq 2 ] && jq -e '.reason=="schema_violation" and (.error|test("merge.method"))' <<<"$out" >/dev/null || config_ok=0
+cp "$POLICY_EXAMPLE" "$CONFIG_REPO/.harness-plugins/agent-work-policy.config.yml"
+yq -i 'del(.merge.method)' "$CONFIG_REPO/.harness-plugins/agent-work-policy.config.yml"
+out=$(python3 "$CONFIG_TOOL" read --repo "$CONFIG_REPO"); [ "$?" -eq 2 ] && jq -e '.reason=="schema_violation" and (.error|test("merge.method"))' <<<"$out" >/dev/null || config_ok=0
+printf 'a: [\n' > "$CONFIG_REPO/.harness-plugins/agent-work-policy.config.yml"
+out=$(python3 "$CONFIG_TOOL" check --repo "$CONFIG_REPO"); [ "$?" -eq 2 ] && jq -e '.reason=="schema_violation"' <<<"$out" >/dev/null || config_ok=0
+rm "$CONFIG_REPO/.harness-plugins/agent-work-policy.config.yml"
+out=$(python3 "$CONFIG_TOOL" check --repo "$CONFIG_REPO"); [ "$?" -eq 2 ] && jq -e '.reason=="policy_missing" and (.config|endswith("/.harness-plugins/agent-work-policy.config.yml"))' <<<"$out" >/dev/null || config_ok=0
+python3 "$CONFIG_TOOL" check >/dev/null 2>&1; [ "$?" -eq 2 ] || config_ok=0
+[ "$config_ok" -eq 1 ] && pass "config.py check|read の契約（正例・policy_missing・schema_violation・not_a_git_repository）" || fail "config.py check|read の契約"
 
 # ── 4. 公開object入口のwalkthrough ───────────────────────────────────────
 PUBLIC_ENTRY="$ENTRY/scripts/invoke.py"

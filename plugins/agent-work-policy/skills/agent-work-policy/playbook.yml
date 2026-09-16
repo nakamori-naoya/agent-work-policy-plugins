@@ -25,10 +25,16 @@ steps:
     needs: [contract, version, action, repo, approved, branch, paths, message, title, body_file, pr]
     provides: [request]
 
+  - id: config
+    script: scripts/config.py
+    purpose: 対象repositoryのgit rootに固定したpolicy設定fileをschema検査し、絶対pathと値を返す。不備なら操作へ進まない
+    needs: [repo]
+    provides: [config_path, config_values]
+
   - id: invoke
     script: scripts/invoke.py
-    purpose: 対象repositoryのpolicy設定を読み、permission・readiness・gateを適用して許可された1操作だけを実行し、公開結果objectを返す
-    needs: [request]
+    purpose: 検査済みのpolicy設定に従い、permission・readiness・gateを適用して許可された1操作だけを実行し、公開結果objectを返す
+    needs: [request, config_path]
     provides: [status, gate_state, operation_result, approval_target, workspace, reason]
 
   - id: report

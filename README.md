@@ -112,7 +112,7 @@ marketplaceの取得と、インストール済みパッケージの更新は分
 
 ## policy設定
 
-policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` の1層だけである。利用者の個人設定（`~/.config/harness-plugins/`）、端末固有の `.local.yml`、同梱既定へのfallbackは無い。方針はrepositoryが所有し、実行者の個人設定で緩められない。fileが無ければ操作を行わず `reason: policy_missing` を返し、schemaに無いkey・欠けたkey・型違いは診断付きで止まる。全keyの意味は [settings.md](plugins/agent-work-policy/skills/agent-work-policy/references/settings.md)、schemaは [CONTRACT.md §5](plugins/agent-work-policy/skills/agent-work-policy/CONTRACT.md) にある。
+policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` の1層だけである。利用者の個人設定（`~/.config/harness-plugins/`）、端末固有の `.local.yml`、同梱既定へのfallbackは無い。方針はrepositoryが所有し、実行者の個人設定で緩められない。読み取りは入口の `scripts/config.py check|read --repo <repository配下のpath>`（stdin不要、pathはtoolが固定、stdoutにJSON 1文書。失敗は終了code 2と `reason`: `policy_missing` / `schema_violation` / `not_a_git_repository`）で行い、`invoke.py` も同じ検査を内部で共有する。fileが無ければ操作を行わず `reason: policy_missing` を返し、schemaに無いkey・欠けたkey・型違いは診断付きで止まる。全keyの意味は [settings.md](plugins/agent-work-policy/skills/agent-work-policy/references/settings.md)、schemaは [CONTRACT.md §5](plugins/agent-work-policy/skills/agent-work-policy/CONTRACT.md) にある。
 
 repositoryのすべての変更作業へ適用するには、そのrepositoryの `AGENTS.md` / `CLAUDE.md` で `agent-work-policy` の利用を必須にする（[activation.md](plugins/agent-work-policy/skills/agent-work-policy/references/activation.md)）。
 

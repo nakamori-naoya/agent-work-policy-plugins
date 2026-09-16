@@ -24,7 +24,7 @@ marketplaceへ公開するインストール対象は、package `agent-work-poli
 
 ## policy設定は repository 1層
 
-policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` だけを読む。個人設定、端末固有設定、同梱既定へのfallback、設定解決runtime（`prepare.sh` / `resolve.sh` / `run-config.py`）を置かない。記入例は `assets/policy.example.yml` で、既定値として読まれない。`SKILL.md`、`references/`、`playbook.yml` に `${.` マクロ、同期block、環境変数によるroot解決を書かない。
+policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` だけを読む。公開入口の手順が呼ぶ設定読み取りは `scripts/config.py check|read --repo <path>` だけで、schemaの正本は `control.py` の `POLICY_SCHEMA` / `validate_policy` である。個人設定、端末固有設定、同梱既定へのfallback、設定解決runtime（`prepare.sh` / `resolve.sh` / `run-config.py`）を置かない。記入例は `assets/policy.example.yml` で、既定値として読まれない。`SKILL.md`、`references/`、`playbook.yml` に `${.` マクロ、同期block、環境変数によるroot解決を書かない。
 
 ## 契約を変えるとき
 

@@ -12,7 +12,7 @@ repositoryが所有するpolicyに従って、Git作業の1操作を実行し、
 ## 入力
 
 - 契約入力: `contract: agent-work-policy/agent-work-policy`、`version: 1`、`action`（1つ）、`repo`（実在するrepositoryの絶対path）、そのactionに必要な値だけ（[公開契約](CONTRACT.md) §2）。`approved: true` は、会話中の利用者の明示承認または信頼できるsession状態で承認を確認できた再呼び出しにだけ付ける。
-- policy設定file: `<repository root>/.harness-plugins/agent-work-policy.config.yml`。1層で必須、同梱既定へのfallbackは無い。keyの一覧と型は[設定値](references/settings.md)、記入例は[`assets/policy.example.yml`](assets/policy.example.yml)。fileが無ければ操作を行わず `status: failed`、`reason: policy_missing` を返す。schemaに無いkey、欠けたkey、型違いは `reason: error` と診断で止まる。
+- policy設定file: `<repository root>/.harness-plugins/agent-work-policy.config.yml`。1層で必須、同梱既定へのfallbackは無い。keyの一覧と型は[設定値](references/settings.md)、記入例は[`assets/policy.example.yml`](assets/policy.example.yml)。読み取りtoolの契約は手順2にある。
 
 ## 判断基準
 
@@ -27,12 +27,13 @@ repositoryが所有するpolicyに従って、Git作業の1操作を実行し、
 同じagentが、同じdirectoryの [`playbook.yml`](playbook.yml) が宣言する順で次を辿る。
 
 1. **入力を組み立てる。** 契約入力を受け取ったらそのまま使う。自然言語の依頼では、`action` 1つ、`repo` の絶対path、そのactionの追加入力だけを持つobjectを作る。
-2. **公開entryを実行する。** `scripts/invoke.py` へ入力objectをJSONとして標準入力から1つ渡す。
-   - 入力: [公開契約](CONTRACT.md) §2 のJSON object（標準入力）。policy設定fileは `repo` のrepository rootから `invoke.py` が読む。
+2. **policyを確かめる（`config`）。** policy設定の読み取りは `python3 scripts/config.py check --repo <repo>` / `python3 scripts/config.py read --repo <repo>` だけで行う。設定fileの置き場はtoolが `<repositoryのgit root>/.harness-plugins/agent-work-policy.config.yml` に固定する（1層、fallback無し。呼び手はpathを選ばない）。stdinは使わない。`check` はschema検査だけを行い、終了code `0` で標準出力に `{"status":"ok","config":"<絶対path>"}` を返す。`read` はschema検査後に終了code `0` で `{"config":"<絶対path>","values":{<設定fileのtop-level keyと値をそのまま>}}` を返す。失敗は終了code `2` で標準出力に `{"error":"<診断>","config":"<絶対path>","reason":<理由>}` を返し、理由は `policy_missing`（fileが無い）/ `schema_violation`（keyの過不足・型違い・許容外の値・読めないfile）/ `not_a_git_repository`（`--repo` がgit repositoryでない。このとき `config` は `null`）。`2` なら操作へ進まず止まる。
+3. **公開entryを実行する（`invoke`）。** `scripts/invoke.py` へ入力objectをJSONとして標準入力から1つ渡す。
+   - 入力: [公開契約](CONTRACT.md) §2 のJSON object（標準入力）。`invoke.py` は `repo` のrepository rootのpolicy設定を `config.py` と同じ検査で読み、不備なら `policy_missing` または `error` を返す。
    - 出力: [公開契約](CONTRACT.md) §3 のJSON object（標準出力1行）。
    - 終了code: `0` = `completed`。`2` = 入力不備（Git操作前に停止）。`3` = `waiting_for_human`、`permission_denied`、`policy_missing`、操作失敗。どの終了codeでも出力objectを読み、`status` と `reason` で次を決める。
    - 失敗時: 停止して結果をそのまま報告する。再実行は、`invalid_input` なら入力を直してから、`waiting_for_human` なら承認を得てから、`merge_partial` なら状態確認後に `cleanup` だけを行う。`control.py` を直接呼ばない。
-3. **結果を返す。** 出力objectを呼び出し元へ直接返す。承認待ちでは `approval_target` を利用者へ提示し、承認後に同じactionを `approved: true` で再度渡すことを示す。内部の設定path、script名、exit codeを公開結果へ足さない。
+4. **結果を返す。** 出力objectを呼び出し元へ直接返す。承認待ちでは `approval_target` を利用者へ提示し、承認後に同じactionを `approved: true` で再度渡すことを示す。内部の設定path、script名、exit codeを公開結果へ足さない。
 
 policyの各値が操作のどこへ効くかは[設定値](references/settings.md)、permission → readiness → gate → 操作の順序と各操作の停止条件は[操作契約](references/operation-contract.md)、repository全体で必須化する方法は[常時適用](references/activation.md)にある。
 
@@ -40,7 +41,7 @@ policyの各値が操作のどこへ効くかは[設定値](references/settings.
 
 この入口の操作はすべてrepositoryの外部状態（working tree、branch、remote、PR）を変えるので、判断の揺れを仮説で埋めて実行しない。止まるのは次の場合である。操作を行わず、または実行した操作だけを結果として報告する。
 
-- policy設定fileが無い（`policy_missing`）、または schema に合わない（`error` と診断）。
+- `config.py` が `2` を返した（`policy_missing` / `schema_violation` / `not_a_git_repository`）、または `invoke.py` が `policy_missing` / `error` を返した。
 - 入力が契約に合わない（`invalid_input`）、または自然言語の依頼からactionと対象が特定できない。入力を直すか一問で確認してから呼び直す。
 - human gateで承認待ち（`waiting_for_human`）。承認対象を提示して待つ。承認が得られなければ、その操作を実行済みとして扱わない。
 - permission拒否（`permission_denied`）、readiness未充足のmerge（`not_ready`）、検証失敗（`verification_failed`）、`merge_partial` / `merge_failed` / `cleanup_failed`。`merge_partial` ではmergeを再実行しない。
