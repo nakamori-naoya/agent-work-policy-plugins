@@ -9,7 +9,7 @@
       "name": "agent-work-policy",
       "source": "./plugins/agent-work-policy",
       "description": "Git作業の1操作を、repositoryごとのpermissionとhuman gateに従って実行する",
-      "version": "3.0.0"
+      "version": "4.0.0"
     }
   ]
 }
