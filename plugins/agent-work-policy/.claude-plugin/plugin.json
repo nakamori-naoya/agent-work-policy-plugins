@@ -1,0 +1,40 @@
+{
+  "name": "agent-work-policy",
+  "version": "2.0.3",
+  "description": "Git作業の1操作を、repositoryのpolicyのpermissionとhuman gateに従って実行する公開playbook agent-work-policyを提供する",
+  "author": {
+    "name": "NaoyaNakamori"
+  },
+  "skills": [
+    "./skills/agent-work-policy"
+  ],
+  "metadata": {
+    "harness": {
+      "marketplace": "agent-work-policy",
+      "contractVersion": 1,
+      "playbooks": {
+        "agent-work-policy": "./skills/agent-work-policy"
+      },
+      "implements": [
+        {
+          "id": "agent-work-policy/agent-work-policy",
+          "version": 1,
+          "kind": "playbook",
+          "playbook": "agent-work-policy",
+          "actions": [
+            "inspect",
+            "plan",
+            "start",
+            "commit",
+            "push",
+            "pull-request",
+            "ready-for-review",
+            "merge-readiness",
+            "merge",
+            "cleanup"
+          ]
+        }
+      ]
+    }
+  }
+}

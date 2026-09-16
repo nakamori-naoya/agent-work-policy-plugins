@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/license-contract.XXXXXX") || exit 2
 trap 'rm -rf "$TMP"' EXIT
 CHECK="$ROOT/scripts/validate-plugin-license.sh"
-PLUGIN_LICENSE="$ROOT/plugins/LICENSE"
+PLUGIN_LICENSE="$ROOT/plugins/agent-work-policy/LICENSE"
 FAIL=0
 
 if bash "$CHECK" "$ROOT/LICENSE" "$PLUGIN_LICENSE"; then

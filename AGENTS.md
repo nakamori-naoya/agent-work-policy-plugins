@@ -1,39 +1,45 @@
+> 作業を始める前に、workspace正本入口 `/Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/AGENTS.md` を読み、そこから指定される共通規約とこのrepository固有の規則を適用する。
+
 # AGENTS.md
 
-このrepositoryは、変更、commit、push、PR、mergeの権限とhuman gateを解決する単一marketplaceである。
+このrepositoryは、変更、commit、push、PR、mergeの権限とhuman gateをrepositoryのpolicyに従って適用する単一marketplaceである。
 
-## 公開面はPlaybook 1枚だけ
+## 公開面は入口1つだけ
 
-marketplaceへ公開するインストール対象は、Playbook package `agent-work-policy`（`./plugins`）1件だけにする。内部処理や管理者判定を別entryへ分解せず、他の作業pluginを追加しない。
+marketplaceへ公開するインストール対象は、package `agent-work-policy`（`./plugins/agent-work-policy`）1件だけにする。公開入口は `skills/agent-work-policy` 1つで、公開playbook `agent-work-policy` でもある。内部skill、内部plugin、他の作業pluginを追加しない。
 
 | 面 | 実体 | 外部から |
 |---|---|---|
-| 公開 playbook | `plugins/playbooks/automation/agent-work-policy` | `steps[].playbook: agent-work-policy` で呼べる |
-| 利用者導線の skill | 同 `SKILL.md` の frontmatter `name: work-with-policy` | 利用者が直接呼べる |
-| 内部 plugin | `plugins/skills/automation/work-policy-control`（skill `apply-work-policy`） | **呼べない** |
+| 公開入口 / 公開 playbook | `plugins/agent-work-policy/skills/agent-work-policy`（SKILL.md `name: agent-work-policy`） | 利用者が直接呼べる。別pluginは `steps[].playbook: agent-work-policy` で呼べる |
+| 公開 entry | 同 `scripts/invoke.py` | 契約入力objectを標準入力で受け、契約出力objectを返す |
+| 内部 script | 同 `scripts/control.py` | **呼べない** |
 
-外部pluginへ公開するのは、[CONTRACT.md](plugins/playbooks/automation/agent-work-policy/CONTRACT.md)が定める入口・入力・出力・保証だけである。次は公開しない。文書にも書かない。
+外部pluginへ公開するのは、[CONTRACT.md](plugins/agent-work-policy/skills/agent-work-policy/CONTRACT.md)が定める入口・入力・出力・保証だけである。次は公開しない。文書にも書かない。
 
-- `control.py` / `prepare.sh` / `run-config.py` の存在、引数、サブコマンド名、exit code
-- 設定ファイルの名前・場所・schema・キー
-- 内部 plugin 名（`work-policy-control`）と内部 skill 名（`apply-work-policy`）
+- `control.py` の引数、サブコマンド名、exit code
+- policy設定の schema・キー（利用者向けの公開契約であって、消費側 plugin が触る面ではない）
 - `references/` の文書とその節
 
 消費側が必要とする値（base branch、remote、draft設定、作業branch、worktree）は、公開出力の `workspace` として毎回返す。**消費側にこのpackageの設定を読ませない。**
 
+## policy設定は repository 1層
+
+policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` だけを読む。個人設定、端末固有設定、同梱既定へのfallback、設定解決runtime（`prepare.sh` / `resolve.sh` / `run-config.py`）を置かない。記入例は `assets/policy.example.yml` で、既定値として読まれない。`SKILL.md`、`references/`、`playbook.yml` に `${.` マクロ、同期block、環境変数によるroot解決を書かない。
+
 ## 契約を変えるとき
 
-1. `plugins/.claude-plugin/plugin.json` と `plugins/.codex-plugin/plugin.json` の `metadata.harness` を**両方同時に**変える。両者は完全一致でなければならない。
+1. `plugins/agent-work-policy/.claude-plugin/plugin.json` と `.codex-plugin/plugin.json` の `metadata.harness` を**両方同時に**変える。両者は完全一致でなければならない。
 2. `implements[0].actions` と `playbook.yml` の `contract.actions` を同じ集合に保つ。action は kebab-case。
-3. `CONTRACT.md` の入口・入力・出力・保証・非契約を更新する。契約の版は 1 固定である。
-4. 1 呼び出し 1 action を崩さない。工程は `apply-work-policy` の1件だけにする。
+3. `CONTRACT.md` の入口・入力・出力・保証・利用者設定・非契約を更新する。契約の版は 1 固定である。§5.1 の schema、`assets/policy.example.yml`、`control.py` の `POLICY_SCHEMA` は同じキー集合を持つ。
+4. 1 呼び出し 1 action を崩さない。
 
 ## 共通実装
 
-`shared/playbook/`、`shared/prepare.sh`、`shared/skill/` と配布物内の複製は、Product Planning repositoryの`shared/runtime-source`が正本である。個別に編集せず、`python3 scripts/sync-runtime.py --source <正本checkout>` で取り込む。
+`shared/` と `scripts/` の保守tool（doctor / lint-consumer-contract / evaluate-skills / release / sync-runtime / test-hardening / validate-distribution）は、Product Planning repositoryの `shared/runtime-source` が正本である。個別に編集せず、`python3 scripts/sync-runtime.py --source <正本checkout>` で取り込む。
 
 ## 変更後
 
 ```bash
 bash scripts/validate.sh
+bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/scripts/validate.sh /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/agent-work-policy-plugins
 ```

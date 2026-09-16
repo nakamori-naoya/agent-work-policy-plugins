@@ -8,7 +8,7 @@
       "name": "agent-work-policy",
       "source": {
         "source": "local",
-        "path": "./plugins"
+        "path": "./plugins/agent-work-policy"
       },
       "policy": {
         "installation": "AVAILABLE",
