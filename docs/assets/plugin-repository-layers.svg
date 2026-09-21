@@ -23,7 +23,7 @@
   <text x="65" y="106" class="label">Repository開発層（install後は存在しない）</text>
   <rect x="80" y="130" width="220" height="62" rx="9" fill="#ffffff" stroke="#b5791f"/>
   <text x="112" y="158" class="label">shared/</text>
-  <text x="112" y="180" class="small">共通sourceの正本</text>
+  <text x="112" y="180" class="small">共通sourceの参照元</text>
   <rect x="440" y="130" width="220" height="62" rx="9" fill="#ffffff" stroke="#b5791f"/>
   <text x="472" y="158" class="label">scripts/validate.sh</text>
   <text x="472" y="180" class="small">release gate</text>
