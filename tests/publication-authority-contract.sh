@@ -291,7 +291,7 @@ expect_json 3 forbidden python3 "$PLUGIN/scripts/control.py" permission --config
 expect_json 3 waiting_for_human python3 "$PLUGIN/scripts/control.py" gate --config "$CFG" --action push
 expect_json 0 approved python3 "$PLUGIN/scripts/control.py" gate --config "$CFG" --action push --approved
 
-echo "  Then commit前検証とhuman gateは正本が返し、下流pluginはcommitしない"
+echo "  Then commit前検証とhuman gateはagent-work-policyが返し、下流pluginはcommitしない"
 printf 'change\n' >> "$TMP/repository/tracked"
 printf 'tracked\n' > "$TMP/paths.txt"
 output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/paths.txt" --message fixture 2>"$TMP/stderr")

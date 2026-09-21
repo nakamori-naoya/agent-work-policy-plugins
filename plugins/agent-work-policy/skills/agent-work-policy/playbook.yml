@@ -1,5 +1,5 @@
 # agent-work-policy — Git作業の1操作を、repositoryが所有するpolicyのpermissionとhuman gateに従って実行する。
-# 公開する入力・出力・保証は CONTRACT.md が正本。工程順はこのYAMLが正本で、同じagentが辿る。
+# 公開する入力・出力・保証は CONTRACT.md が正式な定義。工程順はこのYAMLの宣言を正式な定義とするで、同じagentが辿る。
 version: 2
 name: agent-work-policy
 description: Git作業の1操作を、permissionとhuman gateに従って実行する

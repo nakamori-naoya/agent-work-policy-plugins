@@ -17,11 +17,11 @@
 
 消費側はproviderのroot、entry file、policy設定path、内部scriptを参照または実行しない。policy設定の読み取りはproviderの責務である。外部依存は`skill:`または`script:`stepで指さない。
 
-`plugin.json`の`implements[]`にある契約ID、version、playbook、actionsと、`playbook.yml`の`contract`宣言が機械可読な入口正本である。`contract.invocation.input`と`output`はどちらも`object`である。
+`plugin.json`の`implements[]`にある契約ID、version、playbook、actionsと、`playbook.yml`の`contract`宣言が機械可読な入口の契約定義である。`contract.invocation.input`と`output`はどちらも`object`である。
 
 ### 1.1 公開入口検査の宣言
 
-- 正本: `plugin.json`の`metadata.harness.implements[]`と`playbook.yml`の`contract`
+- 基準資料: `plugin.json`の`metadata.harness.implements[]`と`playbook.yml`の`contract`
 - 入力: 公開入口directoryと、標準入力から受け取るJSON object、対象repositoryのpolicy設定file
 - 正規化: action名は宣言値と完全一致で比較し、repositoryとaction固有pathはrealpathへ正規化する。policy設定fileはrepository rootから固定名で解決する
 - 述語: 宣言したcontract ID・version・actions・object入出力・entryが一致し、entryが入力schemaを満たす1 actionとschemaを満たすpolicyだけを内部policy実行へ渡す
@@ -84,7 +84,7 @@ pr: 1234                                     # ready-for-review / merge-readines
 
 ### 2.1 action
 
-`plugin.json` の `metadata.harness.implements[].actions` が正本である。v1 の値は次の 10 個。
+`plugin.json` の `metadata.harness.implements[].actions` が契約定義である。v1 の値は次の 10 個。
 
 | action | 意味 | 追加入力 | human gate |
 |---|---|---|---|
