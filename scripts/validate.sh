@@ -4,7 +4,7 @@
 # policyの妥当性、承認対象の十分性、SKILL本文の判断基準の十分性は意味評価として残す。
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-# 保守toolの正本は兄弟checkoutの harness-tools。無ければ止まる（fixtureで代用しない）。
+# 保守toolの実装元は兄弟checkoutの harness-tools。無ければ止まる（fixtureで代用しない）。
 TOOLS="$ROOT/../harness-tools/tools"
 [ -d "$TOOLS" ] || { echo "[error] 兄弟 checkout harness-tools が無い: $TOOLS" >&2; exit 2; }
 # **一時領域を正規形へ直さない。** macOS 既定の TMPDIR は /var/folders/... という
@@ -176,7 +176,7 @@ scripts_found=$(find "$ENTRY/scripts" -type f -not -path "*/__pycache__/*" | sed
 [ "$scripts_found" = "config.py control.py invoke.py " ] && pass "入口scriptsはconfig.py・control.py・invoke.pyだけ" || fail "入口scriptsに余分なfile: $scripts_found"
 
 # ── 3.3 設定読み取りtool config.py check|read（D7の共通契約） ─────────────────
-# 正本: control.py の POLICY_FILE / POLICY_SCHEMA / validate_policy と共通契約（stdin不要、pathはtoolが固定、stdoutにJSON 1文書、失敗はexit 2と reason）。
+# 基準資料: control.py の POLICY_FILE / POLICY_SCHEMA / validate_policy と共通契約（stdin不要、pathはtoolが固定、stdoutにJSON 1文書、失敗はexit 2と reason）。
 # 入力: `config.py check|read --repo <path>`。正規化: git rev-parse --show-toplevel で git root を解決し、<root>/.harness-plugins/agent-work-policy.config.yml を yq でJSON化する。
 # 合格述語: check は exit 0 と {"status":"ok","config":<絶対path>}、read は exit 0 と {"config","values"}（values は top-level key をそのまま）。
 #   失敗は exit 2 と {"error","config","reason"} で reason は policy_missing / schema_violation / not_a_git_repository のどれか。not_a_git_repository では config は null。

@@ -1,6 +1,6 @@
 # プラグインの配布単位とインストール
 
-この資料は2026-09-06時点の記録である。2026-09-16にmarketplaceの `source` を `./plugins/<package>` へ、公開入口を `plugins/<package>/skills/<entry>/` へ統一した。本文の配布元pathは当時のものであり、現在の配置は各repositoryのREADMEを正本とする。
+この資料は2026-09-06時点の記録である。2026-09-16にmarketplaceの `source` を `./plugins/<package>` へ、公開入口を `plugins/<package>/skills/<entry>/` へ統一した。本文の配布元pathは当時のものであり、現在の配置は各repositoryのREADMEを参照元とする。
 
 このリポジトリ群では、利用者が仕事を依頼する公開パッケージをインストールする。文書の型選択やレビューなど、途中の処理は同じパッケージに含める。内部のスキル名はインストール対象ではない。
 

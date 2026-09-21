@@ -49,7 +49,7 @@ scriptが`waiting_for_human`を返した場合だけ、対象を提示して承�
 2. `--repo`が必要なcommandには公開対象repositoryを渡す。`--config`のfileは`--repo`のrepository rootに置かれたものでなければならず、別repositoryの設定は`設定と対象repositoryが一致しない`としてexit `2`で拒否する。`permission`と`gate`は`--repo`を取らない。
 3. actionは`commit`、`push`、`pull_request`、`merge`だけである。`ready-for-review`は`pull_request` actionを再利用する。各公開commandの追加入力は以下のとおり。
 
-| command | 追加入力 | 実行前に正本が行うこと |
+| command | 追加入力 | 実行前にagent-work-policyが行うこと |
 |---|---|---|
 | `commit` | `--repo`、`--paths-file`、`--message` | permissionを判定し、pathを限定して設定済み検証を実行してからgateを判定する |
 | `push` | `--repo` | permissionを判定し、branchとHEAD SHAを取得してからgateを判定する |

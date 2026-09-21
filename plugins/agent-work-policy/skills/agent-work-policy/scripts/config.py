@@ -13,7 +13,7 @@ read : schema検査後、exit 0、標準出力に {"config":"<絶対path>","valu
   schema_violation      keyの過不足・型違い・許容外の値・yqで読めないfile（detailを error に含める）
   not_a_git_repository  --repo が git repository ではない（設定fileのpathを決められないので config は JSON の null）
 
-schemaの正本は同じdirectoryの control.py（POLICY_SCHEMA / validate_policy）で、このtoolはそれを共有する。invoke.py も同じ検査を内部で行う。
+schemaの契約定義は同じdirectoryの control.py（POLICY_SCHEMA / validate_policy）で、このtoolはそれを共有する。invoke.py も同じ検査を内部で行う。
 """
 from __future__ import annotations
 

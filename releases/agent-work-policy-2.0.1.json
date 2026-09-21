@@ -19,7 +19,7 @@
     },
     "real-distribution": "fixtureだけで緑にせず、兄弟checkoutの実配布物を解決させた",
     "consumer-contract-lint": "scripts/lint-consumer-contract.py: codex / claude 両runtimeで 0 finding",
-    "runtime-sync": "scripts/sync-runtime.py --check --source <正本>: version 2.4.2、changed 空",
+    "runtime-sync": "scripts/sync-runtime.py --check --source <基準資料>: version 2.4.2、changed 空",
     "regression": "scripts/test-hardening.py: 全緑（汎用規則の先行診断、runtime判定、input_resolvedの負の試験を追加）",
     "post-version-validation": "HARNESS_PLUGIN_RUNTIME=claude / codex の /bin/bash scripts/validate.sh: passed (exit 0)"
   },

@@ -1,6 +1,6 @@
 # 2026-09-02時点のPlugin repository群の調査記録
 
-この資料は2026-09-02時点の記録である。2026-09-16に配置を `plugins/<package>/skills/<entry>/` の一形へ統一し、本文にある `plugins/playbooks/` と `plugins/skills/` の二層構造、入口ごとのnested manifest、設定解決runtimeは現在の形ではない。現在の配置は[README](../README.md)を正本とする。
+この資料は2026-09-02時点の記録である。2026-09-16に配置を `plugins/<package>/skills/<entry>/` の一形へ統一し、本文にある `plugins/playbooks/` と `plugins/skills/` の二層構造、入口ごとのnested manifest、設定解決runtimeは現在の形ではない。現在の配置は[README](../README.md)を参照元とする。
 
 この資料は記載されたコミット時点の調査記録です。現在のインストール対象と配布方針は[プラグインの配布単位とインストール](plugin-distribution-guidelines.md)を参照してください。
 
@@ -42,7 +42,7 @@
 ├── plugins/
 │   ├── skills/<領域>/<plugin>/          # leaf skill plugin root
 │   └── playbooks/<領域>/<plugin>/       # leaf playbook plugin root
-├── shared/                              # pluginへ複製する開発時正本
+├── shared/                              # pluginへ複製する開発時の参照元
 ├── scripts/validate.sh                  # repository-level検証入口
 ├── tests/                               # 任意の追加scenario test
 └── docs/                                # 任意のmarketplace全体資料
@@ -55,7 +55,7 @@
 | `.agents/plugins/` | Codex catalog | 個別payloadではない | `marketplace.json` |
 | `.claude-plugin/` | Claude Code catalog | 個別payloadではない | `marketplace.json` |
 | `plugins/` | 全leaf plugin rootを領域別に収容 | Catalogが指すleafだけ対象 | 対象pluginの両manifest |
-| `shared/` | 複数pluginへ同期する共通sourceの正本 | 直接は対象外 | `prepare.sh`、`skill/resolve.sh`、`playbook/resolve.sh` |
+| `shared/` | 複数pluginへ同期する共通sourceの参照元 | 直接は対象外 | `prepare.sh`、`skill/resolve.sh`、`playbook/resolve.sh` |
 | `scripts/` | Repository全体の整合性と構文を検査 | 対象外 | `validate.sh` |
 | `.harness-plugins/` | Source repositoryのagent作業方針 | 対象外 | `work-policy-control.config.yml` |
 | `AGENTS.md` | Repository責務、禁止事項、検証command | 対象外 | `AGENTS.md` |
@@ -68,7 +68,7 @@
 |---|---|---|---|
 | `.codex-plugin/`、`.claude-plugin/` | Runtime別 identity、version、capability | 全plugin | `plugin.json` |
 | `skills/` | Runtimeへ公開する skill entry | Skillを公開するplugin | `<skill>/SKILL.md` |
-| `SKILL.md` | Plugin固有手順の正本 | 単一入口型で使用 | `SKILL.md` |
+| `SKILL.md` | Plugin固有手順の基準資料 | 単一入口型で使用 | `SKILL.md` |
 | `playbook.yml` | 工程、依存、needs/provides、契約 | Playbookのみ | `playbook.yml` |
 | `config/` | Bundled defaultと静的schema | 設定を持つplugin | `defaults.yml` |
 | `scripts/` | Prepare、resolve、検査、保存、domain処理 | 必要なplugin | `prepare.sh` または主処理 |
@@ -83,7 +83,7 @@
 | Variant | 中心要素 | 現在の例 | 意図的な例外 |
 |---|---|---|---|
 | 単一 skill | 公開manifestが指す一意な `SKILL.md` | `grill`、`content-types` | 設定・reference・assetは必要な場合だけ |
-| 複数 skill playbook | `playbook.yml` と複数の `skills/*/SKILL.md` | `digest` | 各公開skillの正本は1つだけにする |
+| 複数 skill playbook | `playbook.yml` と複数の `skills/*/SKILL.md` | `digest` | 各公開skillの基準資料は1つだけにする |
 | Script-only | Manifest の `Scripts` capability と `scripts/` | `doc-render` | Root / nested `SKILL.md` が無い |
 
 ## ③ 層と依存の向き
@@ -99,7 +99,7 @@
 | Marketplace catalog | Catalogに列挙したleaf plugin root | Source pathでrepository外や親directoryを指さない |
 | Leaf plugin root | Root内のscript・reference・asset・bundled config | Repository rootの`shared/`、`tests/`、`docs/`を実行時に直接読まない |
 | Playbook | 完全修飾した外部plugin | 外部pluginのsourceを入口rootへコピーしない |
-| Repository validation | Catalog、全manifest、shared正本とcopy | Validation script自体をplugin runtimeから呼ばない |
+| Repository validation | Catalog、全manifest、shared参照元とcopy | Validation script自体をplugin runtimeから呼ばない |
 
 ## ④ 重要な入口
 
@@ -122,7 +122,7 @@
 | 観点 | 現状 | 判定 | 推奨 |
 |---|---|---|---|
 | Rootの必須骨格 | 10/10に`.agents`、`.claude-plugin`、`.harness-plugins`、`plugins`、`scripts`、`AGENTS.md`、`README.md`があり、`shared/`は7/10にある | `shared/`は差異 | 共通骨格は維持し、`shared/`は共有資産が必要なrepositoryだけに置く |
-| Plugin source path | 38/43が4段構成で、5/43は領域を持たない別の深さ | 不一致 | catalogが指すplugin rootを正本とし、4段構成を一律に要求しない |
+| Plugin source path | 38/43が4段構成で、5/43は領域を持たない別の深さ | 不一致 | catalogが指すplugin rootを参照元とし、4段構成を一律に要求しない |
 | Runtime間のidentity | 全43 entryでname、version、sourceが一致 | 一貫 | 全repositoryで同じvalidatorへ統一する |
 | Symlink | Plugin source内に存在しない | 一貫 | Source境界を曖昧にするsymlinkを禁止する |
 | `.gitignore` | 10/10に存在する | 一貫 | repository rootの共通要素として維持する |
@@ -130,7 +130,7 @@
 | 追加testの置き場 | BDDは`scripts/validate-*.sh`、productは`tests/` | 不一致 | `scripts/validate.sh`を公開入口に保ち、詳細scenarioを`tests/`へ寄せる |
 | Playbook依存version | 5つのplaybook repositoryがmarketplace名とplugin名で解決し、versionを固定しない | 一貫 | 解決先のidentityと必要skillを全repositoryで検査する |
 | Product→grill依存 | Productはversionを固定せず、`grill@grill`を名前で解決する | 一貫 | Workspace横断testでlatest compatible versionを継続検査する |
-| `intermediate-cleanup` | BDDとproductの2 marketplaceに別sourceとして重複 | 要確認 | 完全修飾名で扱い、同一正本に寄せるか別物としてversion管理する |
+| `intermediate-cleanup` | BDDとproductの2 marketplaceに別sourceとして重複 | 要確認 | 完全修飾名で扱い、同一の参照元に寄せるか別物としてversion管理する |
 | 余剰directory | BDDの`plugins/playbooks/authoring/`が空 | ドリフト | 削除するか、将来用途を文書化する |
 | Shared copyの同期検査 | Repositoryにより検査対象が異なる | 不一致 | `prepare.sh`、skill resolver、playbook resolverを共通検査する |
 | Configless pluginの`prepare.sh` | `--root-only`では正常だが、汎用usageが示す通常実行は`resolve.sh`欠落で失敗する | 契約不一致 | Root-only専用入口を分けるか、usageと実装を一致させる |
@@ -157,7 +157,7 @@
 
 **現行validationが成功しても、構成一貫性のすべては証明されない。** 多くのvalidatorはCodex catalogをexpected集合として使い、Claude catalogのplugin名集合とmanifest identityを照合する。一方、Claude側source pathの完全一致、source pathの`..`禁止、manifestを持たない余剰directory、実install後payloadは共通には検査しない。
 
-**共通validatorを1つの正本にし、各repositoryの`validate.sh`から呼ぶ構成が望ましい。** 共通検査はroot骨格、両catalogの全field、source path安全性、両manifest、実行権限、shared同期、余剰leaf、install payloadを対象にする。Repository固有の責務境界とBDD scenarioは、その後段で追加する。
+**共通validatorを1つの実装元にし、各repositoryの`validate.sh`から呼ぶ構成が望ましい。** 共通検査はroot骨格、両catalogの全field、source path安全性、両manifest、実行権限、shared同期、余剰leaf、install payloadを対象にする。Repository固有の責務境界とBDD scenarioは、その後段で追加する。
 
 ## ⑥ 次に読むもの
 

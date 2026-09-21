@@ -43,7 +43,7 @@ repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを�
 | 公開entry | `scripts/invoke.py`。契約入力objectを標準入力で受け、契約出力objectを標準出力で返す |
 | 利用者設定 | `<repo>/.harness-plugins/agent-work-policy.config.yml`（1層・必須） |
 
-別pluginからこのpackageを使うときは、`steps[].playbook: agent-work-policy` だけで呼ぶ。内部の script、references、設定 schema、exit code へは依存できない。頼ってよい入力・出力・保証は [CONTRACT.md](plugins/agent-work-policy/skills/agent-work-policy/CONTRACT.md) が正本である。
+別pluginからこのpackageを使うときは、`steps[].playbook: agent-work-policy` だけで呼ぶ。内部の script、references、設定 schema、exit code へは依存できない。頼ってよい入力・出力・保証は [CONTRACT.md](plugins/agent-work-policy/skills/agent-work-policy/CONTRACT.md) が正式な定義である。
 
 ## インストール
 
@@ -127,7 +127,7 @@ bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/scripts/validate.
 
 ## 保守tool
 
-保守用tool（doctor / lint-consumer-contract / evaluate-skills / release / test-hardening / validate-plugin-repository）の正本は兄弟checkoutの `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools/` の実在を確認してから呼び、無ければ止まる。CIの `validate.yml` も `harness-tools` を兄弟checkoutして `harness-tools/ci/validate.sh` を実行する。呼び方は `../harness-tools/README.md` にある。
+保守用tool（doctor / lint-consumer-contract / evaluate-skills / release / test-hardening / validate-plugin-repository）の実装元は兄弟checkoutの `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools/` の実在を確認してから呼び、無ければ止まる。CIの `validate.yml` も `harness-tools` を兄弟checkoutして `harness-tools/ci/validate.sh` を実行する。呼び方は `../harness-tools/README.md` にある。
 
 [意味評価fixture](evals/scenarios.json)を `harness-tools` の評価runner（`scripts/run-evals.sh`）へ渡した記録は、criterionの真偽を機械の合否にせず、人またはエージェントが根拠付きで評価する。
 

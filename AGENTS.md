@@ -1,4 +1,4 @@
-> 作業を始める前に、workspace正本入口 `/Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/AGENTS.md` を読み、そこから指定される共通規約とこのrepository固有の規則を適用する。
+> 作業を始める前に、workspace規約入口 `/Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/AGENTS.md` を読み、そこから指定される共通規約とこのrepository固有の規則を適用する。
 
 # AGENTS.md
 
@@ -24,7 +24,7 @@ marketplaceへ公開するインストール対象は、package `agent-work-poli
 
 ## policy設定は repository 1層
 
-policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` だけを読む。公開入口の手順が呼ぶ設定読み取りは `scripts/config.py check|read --repo <path>` だけで、schemaの正本は `control.py` の `POLICY_SCHEMA` / `validate_policy` である。個人設定、端末固有設定、同梱既定へのfallback、設定解決runtime（`prepare.sh` / `resolve.sh` / `run-config.py`）を置かない。記入例は `assets/policy.example.yml` で、既定値として読まれない。`SKILL.md`、`references/`、`playbook.yml` に `${.` マクロ、同期block、環境変数によるroot解決を書かない。
+policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` だけを読む。公開入口の手順が呼ぶ設定読み取りは `scripts/config.py check|read --repo <path>` だけで、schemaの契約定義は `control.py` の `POLICY_SCHEMA` / `validate_policy` である。個人設定、端末固有設定、同梱既定へのfallback、設定解決runtime（`prepare.sh` / `resolve.sh` / `run-config.py`）を置かない。記入例は `assets/policy.example.yml` で、既定値として読まれない。`SKILL.md`、`references/`、`playbook.yml` に `${.` マクロ、同期block、環境変数によるroot解決を書かない。
 
 ## 契約を変えるとき
 
@@ -35,7 +35,7 @@ policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` だけを
 
 ## 共通実装
 
-保守tool（root契約の構造検査、回帰検査、消費側lint、release、eval）の正本は兄弟checkout `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools` の実在を確認してから呼び、無ければ止まる。
+保守tool（root契約の構造検査、回帰検査、消費側lint、release、eval）の基準資料は兄弟checkout `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools` の実在を確認してから呼び、無ければ止まる。
 
 ## 変更後
 
