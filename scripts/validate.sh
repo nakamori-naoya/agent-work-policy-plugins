@@ -125,10 +125,51 @@ contract_ok=1
 for heading in '^## 1\. 入口' '^## 2\. 入力' '^## 3\. 出力' '^## 4\. 保証' '^## 5\. 利用者設定' '^### 5\.1 schema' '^## 6\. 非契約'; do
   rg -N "$heading" "$ENTRY/CONTRACT.md" >/dev/null || contract_ok=0
 done
-for keyword in 'agent-work-policy/agent-work-policy' 'operation_result' 'approval_target' 'waiting_for_human' 'workspace' 'policy_missing'; do
-  rg -NF "$keyword" "$ENTRY/CONTRACT.md" >/dev/null || contract_ok=0
-done
-[ "$contract_ok" -eq 1 ] && pass "CONTRACT.mdが入口・入力・出力・保証・利用者設定・非契約を公開" || fail "CONTRACT.mdの節"
+[ "$contract_ok" -eq 1 ] && pass "CONTRACT.mdが入口・入力・出力・保証・利用者設定・非契約の節を持つ" || fail "CONTRACT.mdの節"
+
+# 基準資料: playbook.yml の contract（contract_id、actions）と invoke.py の PUBLIC_REASONS。
+# 入力: CONTRACT.md の §2 の action 表、§3.2 の operation_result 表、§3.4 の reason 表の先頭列。
+# 合格述語: 契約IDが本文に現れ、三つの表の先頭列の集合がそれぞれ基準資料の集合と一致する。
+if python3 - "$ENTRY/CONTRACT.md" "$ENTRY/playbook.yml" "$ENTRY/scripts/invoke.py" <<'PY'
+import importlib.util, json, re, subprocess, sys
+contract, playbook, invoke = sys.argv[1:4]
+text = open(contract, encoding="utf-8").read()
+declared = json.loads(subprocess.run(["yq", "-o=json", "-I=0", ".contract", playbook], capture_output=True, text=True, check=True).stdout)
+spec = importlib.util.spec_from_file_location("invoke", invoke); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+def section(start, end):
+    a = text.index(start); b = text.index(end, a + len(start))
+    return text[a:b]
+def first_column(block):
+    # 表の本体の行（見出し行と区切り行を除く）の先頭列にある backtick の値だけを集める。
+    lines = block.splitlines()
+    values = set()
+    for index, line in enumerate(lines):
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        if following.startswith("|---"):
+            continue
+        match = re.match(r"^\| `([^`]+)` \|", line)
+        if match:
+            values.add(match.group(1))
+    return values
+problems = []
+if declared["contract_id"] not in text:
+    problems.append("contract_id")
+actions = set(declared["actions"])
+if first_column(section("## 2. 入力", "### 2.2")) != actions:
+    problems.append("§2 action表")
+if first_column(section("### 3.2", "### 3.3")) != actions:
+    problems.append("§3.2 operation_result表")
+if first_column(section("### 3.4", "## 4. 保証")) != set(module.PUBLIC_REASONS):
+    problems.append("§3.4 reason表")
+if problems:
+    print("不一致: " + ", ".join(problems), file=sys.stderr)
+    sys.exit(1)
+PY
+then
+  pass "CONTRACT.mdの契約ID・action表・operation_result表・reason表が、playbook.ymlとinvoke.pyの宣言と一致"
+else
+  fail "CONTRACT.mdの表が宣言と一致しない"
+fi
 
 public_input_ok=1
 jq -e '.. | objects | has("output_to") | not' <<<"$playbook_json" >/dev/null || public_input_ok=0
