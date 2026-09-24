@@ -47,6 +47,10 @@ policy設定fileは `<repository root>/.harness-plugins/agent-work-policy.config
 
 作業branchをbaseへ追従させるのは `update-branch` だけである。GitHub上でbaseの先端を作業branchへmergeし、localを同じcommitへ進める。履歴を書き換えないので、他者のpushを上書きしない。rebaseやforce pushで追従しない。remoteの作業branchを進めるので、pushと同じpermissionとgateに従う。競合があれば `conflicts` で止まるので、競合を意味で解消する入口へ渡す。取り込んだmerge commitは、squashでmergeすればbaseに入らない。policyの `merge.method` が `rebase` か `fast-forward` なら、そのmerge commitがbaseの履歴に入るので `method_incompatible` で止まる。方式を変えるかは利用者が決める。
 
+### 依存の更新のPRを扱うか
+
+依存の更新のPRをmergeする前と、脆弱性の警告にどう応えるかを決めるときは、[依存の更新](references/dependency-updates.md)を読む。更新のPRは最新のbaseで作り直してから検証し、到達性の検査と版の警告を別の信号として扱う。
+
 ### 並行作業の資源は分かれているか
 
 worktreeが分けるのはGitの作業fileだけである。container project名、公開port、named volume、共有DB、固定pathのcacheやsocketは、worktreeをまたいで同じ名前で共有される。複数の作業場所を並行で `start` する前に、[並行作業の実行資源](references/parallel-work.md)に従って、検証commandが起動・再作成する資源とその名前の決め方を読み、作業場所ごとに分けられない資源を使う検証は直列にする。
