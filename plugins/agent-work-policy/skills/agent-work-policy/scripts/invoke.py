@@ -139,9 +139,26 @@ def approval_shape_problem(approval: object) -> str | None:
     if parse_until(approval.get("until")) is None:
         return "until must be an ISO 8601 time with a UTC offset"
     quote = approval.get("quote")
-    if not isinstance(quote, str) or not quote.strip():
-        return "quote must be the user's words"
+    if not isinstance(quote, list) or not quote or any(not isinstance(item, str) or not item.strip() for item in quote):
+        return "quote must list the user's own words verbatim"
     return None
+
+
+def approval_policy_problem(approval: dict, cfg: dict) -> str | None:
+    """承認範囲がpolicyの作業branchの外（base branchなど）へ広がっていないかを検査する。"""
+    workspace = cfg.get("workspace") or {}
+    prefix, base = workspace.get("branch_prefix"), workspace.get("base_branch")
+    for entry in approval.get("branches", []):
+        if entry == base or not isinstance(prefix, str) or not entry.startswith(prefix):
+            return f"branches entry {entry!r} must be a work branch or prefix under {prefix!r}"
+    return None
+
+
+def branch_in_scope(branch: str | None, entries: list[str]) -> bool:
+    """末尾が / の要素はprefixとして、それ以外は名前の完全一致で照合する。"""
+    return branch is not None and any(
+        branch.startswith(entry) if entry.endswith("/") else branch == entry for entry in entries
+    )
 
 
 def approval_mismatch(approval: dict, action: str, pr: int | None, branch: str | None, now: datetime) -> list[str]:
@@ -152,7 +169,7 @@ def approval_mismatch(approval: dict, action: str, pr: int | None, branch: str |
     if action == "merge":
         if pr not in approval.get("pull_requests", []):
             outside.append("pull_request")
-    elif branch is None or branch not in approval.get("branches", []):
+    elif not branch_in_scope(branch, approval.get("branches", [])):
         outside.append("branch")
     if not now < parse_until(approval["until"]):
         outside.append("until")
@@ -283,6 +300,10 @@ def main() -> None:
     cfg_code, cfg = read_json(["yq", "-o=json", ".", str(config_path)])
     if cfg_code != 0 or not isinstance(cfg, dict):
         failed(action, "error", {"policy": str(config_path), "detail": "policy file is not readable YAML"}, code=3)
+    if "approval" in payload:
+        problem = approval_policy_problem(payload["approval"], cfg)
+        if problem:
+            failed(action, "invalid_input", f"approval {problem}")
     command = [sys.executable, str(control), action, "--config", str(config_path), "--repo", payload["repo"]]
     paths_file = None
     try:
