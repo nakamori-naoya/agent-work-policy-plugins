@@ -4,9 +4,11 @@ policy設定は、対象repository rootの `.harness-plugins/agent-work-policy.c
 
 ## permissionとgateは別の問いに答える
 
-`permissions.*` は「その操作をこのrepositoryでagentにさせてよいか」に答える。falseなら、人がどれだけ承認しても実行しない。承認で上書きできると、policyの意味が承認の与え方しだいで変わってしまうからである。`update-branch` は作業branchのremoteを進めるので `permissions.push` に従い、`ready-for-review` は既存PRの状態を変えるだけなので `permissions.pull_request` に従う。
+`permissions.*` は「その操作をこのrepositoryでagentにさせてよいか」に答える。falseなら、人がどれだけ承認しても実行しない。承認で上書きできると、policyの意味が承認の与え方しだいで変わってしまうからである。
 
-`gates.*` は「その操作の直前に人の確認が要るか」に答える。trueなら、呼び出しの承認範囲 `approval` が今回のaction・対象・時刻を含むときだけ通り、含まなければ承認対象を返して止まる。`update-branch` はgateを持たない。公開済みのbaseを取り込むだけで、新しい内容を公開しないからである。
+`gates.*` は「その操作の直前に人の確認が要るか」に答える。trueなら、呼び出しの承認範囲 `approval` が今回のaction・対象・時刻を含むときだけ通り、含まなければ承認対象を返して止まる。
+
+permissionとgateは、操作が何を変えるかで対にして決める。remoteの作業branchを進める操作（`push` と `update-branch`）は、`permissions.push` と `gates.before_push` に従う。`update-branch` も、PRのheadを変え、CIを走らせ直し、承認済みのreviewを古くするからである。既存PRの状態だけを変える `ready-for-review` は、`permissions.pull_request` に従い、gateを持たない。
 
 ## mergeしてよい状態は二つの条件で決まる
 
@@ -24,7 +26,7 @@ gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[] | {name
 
 ## merge方式はbaseへの追従の仕方も決める
 
-`merge.method` の `squash`、`merge`、`rebase` はGitHubのmerge APIへ渡し、`fast-forward` はbaseのrefを直接headへ進める。`update-branch` はbaseを作業branchへmergeして取り込むので、`squash` と `merge` のときだけ使える。`rebase` と `fast-forward` では、取り込んだmerge commitがそのままbaseの履歴に入り、その方式を選んだ意味が失われるからである。
+`merge.method` の `squash`、`merge`、`rebase` はGitHubのmerge APIへ渡し、`fast-forward` はbaseのrefを直接headへ進める。`update-branch` はbaseを作業branchへmergeして取り込むので、`squash` と `merge` のときだけ使える。`squash` なら取り込んだmerge commitはbaseに入らず、baseの履歴は一直線のまま保てる。`rebase` と `fast-forward` では、そのmerge commitがそのままbaseの履歴に入り、その方式を選んだ意味が失われるので、`method_incompatible` で止まる。
 
 `fast-forward` はGitHubのmerge判定を経ないので、server側にpolicy以上の保護があることを求める。branch protectionの必須checkが `required_checks` の名前をすべて含み、必要な承認数が `min_approvals` 以上で、未解決threadを求めるならconversation resolutionが必須で、管理者にも保護が当たることである。また `merge.delete_branch: true` が必須である。
 
