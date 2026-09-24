@@ -146,4 +146,6 @@ mergeしてよい状態（headがbaseの先端を含み、policyの必須check�
 
 秘密値を検査する範囲、受け渡す一式が揃っているかの確かめ方、退避と写しでの扱いは、`references/secret-handling.md` が持つ。
 
+依存の更新のPRを最新のbaseで作り直すことと、脆弱性の到達性の検査と版の警告を別の信号として扱うことは、`references/dependency-updates.md` が持つ。
+
 誰が統合してよいかという役割の判断は持たず、`agent-roles` に従う。
