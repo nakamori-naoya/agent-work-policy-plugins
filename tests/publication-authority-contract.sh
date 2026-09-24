@@ -134,6 +134,38 @@ elif [ "$1" = repo ] && [ "$2" = view ]; then
     remote_url='git@github.com:fixture/repository.git'
   fi
   printf '{"id":"fixture-repository-id","nameWithOwner":"%s","sshUrl":"%s","url":"%s"}\n' "${FAKE_REPOSITORY:-fixture/repository}" "${FAKE_REPO_SSH_URL:-$remote_url}" "${FAKE_WEB_URL:-https://github.com/fixture/repository}"
+elif [ "$1" = api ] && [[ "${2:-}" == *'/git/ref/heads/'* ]]; then
+  if [ -n "${FAKE_REMOTE:-}" ]; then
+    tip=$(git --git-dir "$FAKE_REMOTE" rev-parse "refs/heads/${2##*/git/ref/heads/}")
+  else
+    tip="${FAKE_BASE_TIP:-${FAKE_PR_BASE_SHA:-$(git rev-parse main)}}"
+  fi
+  printf '{"ref":"refs/heads/main","object":{"sha":"%s","type":"commit"}}\n' "$tip"
+elif [ "$1" = api ] && [[ "${2:-}" == *'/compare/'* ]]; then
+  range=${2##*/compare/}
+  range=${range%%\?*}
+  if [ -n "${FAKE_REMOTE:-}" ]; then
+    behind=$(git --git-dir "$FAKE_REMOTE" rev-list --count "${range#*...}..${range%%...*}")
+  else
+    behind="${FAKE_BEHIND_BY:-0}"
+  fi
+  printf '{"status":"ahead","ahead_by":1,"behind_by":%s}\n' "$behind"
+elif [ "$1" = api ] && [[ " $* " == *'/update-branch '* ]]; then
+  expected=''
+  for arg in "$@"; do
+    case "$arg" in expected_head_sha=*) expected=${arg#expected_head_sha=} ;; esac
+  done
+  branch="${FAKE_PR_HEAD:-agent/delegate}"
+  if [ "$(git --git-dir "$FAKE_REMOTE" rev-parse "refs/heads/$branch")" != "$expected" ]; then
+    echo 'HTTP 422: expected head sha did not match current head ref' >&2
+    exit 1
+  fi
+  work=$(mktemp -d "${TMPDIR:-/tmp}/fake-update-branch.XXXXXX")
+  git clone -q --branch "$branch" "$FAKE_REMOTE" "$work"
+  git -C "$work" -c user.email=fixture@example.invalid -c user.name=fixture merge -q --no-edit origin/main
+  git -C "$work" push -q origin "HEAD:refs/heads/$branch"
+  rm -rf "$work"
+  printf '%s\n' '{"message":"Updating pull request branch.","url":"https://example.invalid/pr/1"}'
 elif [ "$1" = api ] && [[ "${2:-}" == *'/protection' ]]; then
   if [ "${FAKE_REQUIRED_CHECKS_ERROR:-false}" = true ]; then
     echo 'fixture protection lookup failure' >&2
@@ -141,10 +173,8 @@ elif [ "$1" = api ] && [[ "${2:-}" == *'/protection' ]]; then
   fi
   if [ "${FAKE_REQUIRED_CHECKS_EMPTY:-false}" = true ]; then
     status_checks='{"contexts":[],"checks":[]}'
-  elif [ "${FAKE_REQUIRED_CONTEXTS_ONLY:-false}" = true ]; then
-    status_checks='{"contexts":["gitleaks","trufflehog"],"checks":[]}'
   else
-    status_checks='{"contexts":["gitleaks","trufflehog"],"checks":[{"context":"gitleaks","app_id":'"${FAKE_REQUIRED_APP_ID:-15368}"'},{"context":"trufflehog","app_id":'"${FAKE_REQUIRED_APP_ID:-15368}"'}]}'
+    status_checks='{"contexts":["gitleaks","trufflehog"],"checks":[{"context":"gitleaks","app_id":15368},{"context":"trufflehog","app_id":15368}]}'
   fi
   printf '{"required_status_checks":%s,"required_pull_request_reviews":{"required_approving_review_count":%s},"required_conversation_resolution":{"enabled":%s},"enforce_admins":{"enabled":%s}}\n' "$status_checks" "${FAKE_PROTECTION_APPROVALS:-0}" "${FAKE_PROTECTION_CONVERSATIONS:-true}" "${FAKE_PROTECTION_ADMINS:-true}"
 elif [ "$1" = api ] && [[ "${2:-}" == *'/rules/branches/'* ]]; then
@@ -163,7 +193,7 @@ elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]] && [[ " $* " == *'checkSuit
     if [ "${FAKE_GH_MODE:-}" = second-view-check-failed ] && [ "$(cat "${FAKE_VIEW_COUNT:-/dev/null}" 2>/dev/null || printf '0')" -ge 2 ]; then
       check_conclusion=FAILURE
     fi
-    suites='[{"app":{"databaseId":'"${FAKE_CHECK_APP_ID:-15368}"'},"checkRuns":{"nodes":[{"name":"gitleaks","status":"COMPLETED","conclusion":"'"$check_conclusion"'"},{"name":"trufflehog","status":"COMPLETED","conclusion":"SUCCESS"}],"pageInfo":{"hasNextPage":'"${FAKE_CHECK_RUNS_NEXT:-false}"'}}}]'
+    suites='[{"app":{"slug":"'"${FAKE_CHECK_APP:-github-actions}"'"},"checkRuns":{"nodes":[{"name":"gitleaks","status":"COMPLETED","conclusion":"'"$check_conclusion"'"},{"name":"trufflehog","status":"COMPLETED","conclusion":"SUCCESS"}],"pageInfo":{"hasNextPage":'"${FAKE_CHECK_RUNS_NEXT:-false}"'}}}]'
   fi
   if [ "${FAKE_CHECK_DATA_ERRORS:-false}" = true ]; then errors=',"errors":[{"message":"fixture"}]'; else errors=''; fi
   printf '{"data":{"repository":{"object":{"checkSuites":{"nodes":%s,"pageInfo":{"hasNextPage":%s}}}}}%s}\n' "$suites" "${FAKE_CHECK_SUITES_NEXT:-false}" "$errors"
@@ -427,15 +457,19 @@ if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("state:CL
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_PR_HEAD_OWNER=other FAKE_PR_HEAD_REPO=other/repository python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("cross_repository"))' <<<"$output" >/dev/null && ! rg -q 'updateRefs|push ' "$TMP/gh.log"; then ok "cross-repository PR is rejected before mutation"; else ng "cross-repository rejection reason"; fi
 : > "$TMP/gh.log"
-output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_REQUIRED_CONTEXTS_ONLY=true FAKE_CHECKS_JSON='[]' python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
-if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false and (.reasons | index("checks"))' <<<"$output" >/dev/null && ! rg -q 'updateRefs|push ' "$TMP/gh.log"; then ok "empty check rollup fails closed"; else ng "empty check rollup"; fi
-expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REQUIRED_CHECKS_ERROR=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
-output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REQUIRED_CHECKS_EMPTY=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
-if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .required_checks==[] and .checks_passed==false' <<<"$output" >/dev/null; then ok "empty required contexts fail closed"; else ng "empty required contexts"; fi
-output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REQUIRED_CONTEXTS_ONLY=true FAKE_CHECKS_JSON='[{"name":"gitleaks","conclusion":"SUCCESS","status":"COMPLETED"}]' python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
-if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false' <<<"$output" >/dev/null; then ok "missing required context fails closed"; else ng "missing required context"; fi
-output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_APP_ID=999 python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
-if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false and (.reasons | index("checks"))' <<<"$output" >/dev/null; then ok "required check rejects a different GitHub App"; else ng "required check accepted a different GitHub App"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_CHECKS_JSON='[]' python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false and (.reasons | index("checks"))' <<<"$output" >/dev/null && ! rg -q 'updateRefs|push ' "$TMP/gh.log"; then ok "empty final check rollup fails closed"; else ng "empty check rollup"; fi
+: > "$TMP/gh.log"
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_REQUIRED_CHECKS_ERROR=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 0 ] && jq -e '.status=="ready"' <<<"$output" >/dev/null && ! rg -q '/protection' "$TMP/gh.log"; then ok "policy required_checks work without branch protection (non fast-forward)"; else ng "readiness depends on branch protection: $output"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECKS_JSON='[{"name":"gitleaks","conclusion":"SUCCESS","status":"COMPLETED"}]' python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false' <<<"$output" >/dev/null; then ok "missing required check fails closed"; else ng "missing required check"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_APP=impostor-app python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false and (.reasons | index("checks"))' <<<"$output" >/dev/null; then ok "same-named check from a different GitHub App is rejected"; else ng "required check accepted a different GitHub App"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_BEHIND_BY=1 python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .behind_base==1 and (.reasons | index("behind_base"))' <<<"$output" >/dev/null; then ok "head that does not contain the base tip is not ready (behind_base)"; else ng "behind base head was ready: $output"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_BEHIND_BY=0 FAKE_PR_MERGE_STATE=BEHIND python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 0 ] && jq -e '.status=="ready" and .behind_base==0' <<<"$output" >/dev/null; then ok "head containing the base tip is judged by compare, not by mergeStateStatus"; else ng "compare-based behind_base: $output"; fi
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_RUNS_EMPTY=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .checks_passed==false' <<<"$output" >/dev/null; then ok "empty app check runs fail closed"; else ng "empty app check runs fail open"; fi
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_DATA_ERRORS=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
@@ -445,10 +479,6 @@ if [ "$?" -eq 2 ] && jq -e '.error=="GitHub APIがerrorを返した"' <<<"$outpu
 for pagination in FAKE_CHECK_SUITES_NEXT FAKE_CHECK_RUNS_NEXT; do
   output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready "$pagination"=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
   if [ "$?" -eq 2 ] && jq -e '.error | contains("完全に取得できない")' <<<"$output" >/dev/null; then ok "$pagination fails closed"; else ng "$pagination did not fail closed"; fi
-done
-for required_app in null -1; do
-  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REQUIRED_APP_ID="$required_app" FAKE_CHECK_APP_ID=999 python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
-  if [ "$?" -eq 0 ] && jq -e '.status=="ready" and .checks_passed==true' <<<"$output" >/dev/null; then ok "app_id=$required_app accepts a successful check run from any App"; else ng "app_id=$required_app did not accept an arbitrary App check run"; fi
 done
 git -C "$TMP/merge-enabled" remote set-url origin 'https://evil.invalid/path/github.com/fixture/repository.git'
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_OFFICIAL_URLS=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
@@ -563,10 +593,14 @@ fi
 if [ "$(rg -c '^repo view ' "$TMP/gh.log")" -eq 1 ]; then ok "merge fixes repository identity once"; else ng "merge re-resolved repository identity"; fi
 
 echo "  And fast-forwardはpolicy要求以上のserver branch protectionを必須にする"
-for protection_case in conversations admins; do
+for protection_case in conversations admins required_checks; do
   make_ff_repo "protection-$protection_case" || exit 1
-  if [ "$protection_case" = conversations ]; then protection_env=FAKE_PROTECTION_CONVERSATIONS; expected_reason=protection:conversation_resolution; else protection_env=FAKE_PROTECTION_ADMINS; expected_reason=protection:admins; fi
-  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready "$protection_env"=false python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
+  case "$protection_case" in
+    conversations) protection_env=FAKE_PROTECTION_CONVERSATIONS; protection_value=false; expected_reason=protection:conversation_resolution ;;
+    admins) protection_env=FAKE_PROTECTION_ADMINS; protection_value=false; expected_reason=protection:admins ;;
+    required_checks) protection_env=FAKE_REQUIRED_CHECKS_EMPTY; protection_value=true; expected_reason=protection:required_checks ;;
+  esac
+  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$FF_REMOTE" "$protection_env"="$protection_value" python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$FF_CFG" --repo "$FF_REPO" --pr 1 2>"$TMP/stderr")
   if [ "$?" -eq 3 ] && jq -e --arg reason "$expected_reason" '.status=="not_ready" and (.reasons | index($reason))' <<<"$output" >/dev/null && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/main)" = "$FF_BASE" ] && [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_HEAD" ]; then ok "$expected_reason fails closed with refs unchanged"; else ng "$expected_reason was accepted"; fi
 done
 
@@ -634,14 +668,14 @@ destructive_query='mutation { updateRefs(input:{repositoryId:"fixture-repository
 env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" gh api graphql -f "query=$destructive_query" >/dev/null 2>"$TMP/stderr"
 if [ "$?" -ne 0 ]; then ok "strict updateRefs parser rejects destructive merge mutation"; else ng "strict updateRefs parser accepted destructive merge mutation"; fi
 
-echo "  But base進行、head不一致、non-FF、push失敗、PR未反映はmerge失敗にする"
+echo "  But base進行とnon-FFはbehind_baseでreadiness未充足にし、head不一致、push失敗、PR未反映はmerge失敗にする"
 make_ff_repo fast-forward-base-advanced || exit 1
 git -C "$FF_REPO" switch -q main
 printf 'advanced\n' >> "$FF_REPO/tracked"
 git -C "$FF_REPO" commit -qam advanced
 git -C "$FF_REPO" push -q origin main
 git -C "$FF_REPO" switch -q agent/delegate
-expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+expect_json 3 not_ready env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 
 make_ff_repo fast-forward-head-mismatch || exit 1
 expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_BASE" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
@@ -658,7 +692,7 @@ git -C "$FF_REPO" commit -qam diverged
 FF_ADVANCED=$(git -C "$FF_REPO" rev-parse HEAD)
 git -C "$FF_REPO" push -q origin main
 git -C "$FF_REPO" switch -q agent/delegate
-expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_ADVANCED" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
+expect_json 3 not_ready env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=fast-forward FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_ADVANCED" python3 "$PLUGIN/scripts/control.py" merge --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 
 make_ff_repo fast-forward-push-failure || exit 1
 cat > "$FF_REMOTE/hooks/pre-receive" <<'EOF'
@@ -712,6 +746,70 @@ if [ "$(git --git-dir "$FF_REMOTE" rev-parse refs/heads/agent/delegate)" = "$FF_
 make_ff_repo cleanup-exact-head || exit 1
 expect_json 0 cleaned env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_STATE=MERGED FAKE_REMOTE="$FF_REMOTE" FAKE_PR_HEAD_SHA="$FF_HEAD" FAKE_PR_BASE_SHA="$FF_BASE" python3 "$PLUGIN/scripts/control.py" cleanup --config "$FF_CFG" --repo "$FF_REPO" --pr 1
 if git --git-dir "$FF_REMOTE" show-ref --verify --quiet refs/heads/agent/delegate; then ng "cleanup left exact head"; else ok "cleanup CAS deletes the exact PR head"; fi
+
+echo "  And update-branchはbaseの先端を履歴を書き換えずに取り込み、localを同じcommitへ進める"
+make_update_repo() {
+  local name="$1"
+  UB_REPO="$TMP/$name"
+  UB_REMOTE="$TMP/$name.git"
+  git init -q --bare "$UB_REMOTE"
+  mkdir -p "$UB_REPO/.harness-plugins"
+  cp "$FIXTURE" "$UB_REPO/.harness-plugins/agent-work-policy.config.yml"
+  git -C "$UB_REPO" init -q -b main
+  git -C "$UB_REPO" config user.email fixture@example.invalid
+  git -C "$UB_REPO" config user.name fixture
+  printf 'base\n' > "$UB_REPO/base.txt"
+  git -C "$UB_REPO" add .harness-plugins base.txt
+  git -C "$UB_REPO" commit -qm initial
+  git -C "$UB_REPO" switch -qc agent/delegate
+  printf 'work\n' > "$UB_REPO/work.txt"
+  git -C "$UB_REPO" add work.txt
+  git -C "$UB_REPO" commit -qm work
+  git -C "$UB_REPO" remote add origin "$UB_REMOTE"
+  git -C "$UB_REPO" push -q origin main agent/delegate
+  git clone -q --branch main "$UB_REMOTE" "$UB_REPO-writer"
+  git -C "$UB_REPO-writer" -c user.email=fixture@example.invalid -c user.name=fixture commit -q --allow-empty -m advanced
+  git -C "$UB_REPO-writer" push -q origin main
+  UB_CFG="$UB_REPO/.harness-plugins/agent-work-policy.config.yml"
+}
+make_update_repo update-branch-behind || exit 1
+before=$(git -C "$UB_REPO" rev-parse HEAD)
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 2>"$TMP/stderr")
+update_exit=$?
+after=$(git -C "$UB_REPO" rev-parse HEAD)
+remote_after=$(git --git-dir "$UB_REMOTE" rev-parse refs/heads/agent/delegate)
+if [ "$update_exit" -eq 0 ] && jq -e --arg sha "$after" '.status=="updated" and .changed==true and .sha==$sha' <<<"$output" >/dev/null \
+  && [ "$after" = "$remote_after" ] && git -C "$UB_REPO" merge-base --is-ancestor "$before" "$after" \
+  && git -C "$UB_REPO" merge-base --is-ancestor "$(git --git-dir "$UB_REMOTE" rev-parse refs/heads/main)" "$after"; then
+  ok "behind branch takes in the base tip without rewriting history"
+else
+  ng "update-branch did not take in the base tip: $output $(cat "$TMP/stderr")"
+fi
+: > "$TMP/gh.log"
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 0 ] && jq -e '.status=="updated" and .changed==false' <<<"$output" >/dev/null && ! rg -q 'update-branch' "$TMP/gh.log"; then ok "up-to-date branch is unchanged without calling the API"; else ng "update-branch idempotency: $output"; fi
+
+make_update_repo update-branch-conflict || exit 1
+expect_json 3 conflicts env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" FAKE_PR_MERGEABLE=CONFLICTING python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1
+
+make_update_repo update-branch-dirty || exit 1
+printf 'dirty\n' >> "$UB_REPO/work.txt"
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1
+
+make_update_repo update-branch-unpushed || exit 1
+git -C "$UB_REPO" commit -q --allow-empty -m unpushed
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1
+
+for method in rebase fast-forward; do
+  make_update_repo "update-branch-$method" || exit 1
+  yq -i ".merge.method = \"$method\" | .merge.delete_branch = true" "$UB_CFG"
+  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 2>"$TMP/stderr")
+  if [ "$?" -eq 3 ] && jq -e '.status=="forbidden" and .reason=="method_incompatible"' <<<"$output" >/dev/null; then ok "$method policy refuses a merge commit from base"; else ng "$method policy allowed update-branch: $output"; fi
+done
+
+make_update_repo update-branch-no-push || exit 1
+yq -i '.permissions.push = false' "$UB_CFG"
+expect_json 3 forbidden env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1
 
 if [ "$FAIL" -eq 0 ]; then
   echo "Publication authority contract: passed"

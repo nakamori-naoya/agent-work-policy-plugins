@@ -4,7 +4,8 @@
 # permissions: 操作を許すか。falseは人間の承認でも上書きできない。
 # gates: trueなら操作直前に依頼者の明示承認が要る。
 # verification: commit前に全て成功させるcommand。
-# merge.readiness: merge gateを提示してよい状態の機械条件。
+# merge.readiness: merge gateを提示してよい状態の機械条件。required_checksはmergeに必要なcheckの唯一の定義で、
+#   check名と報告元GitHub Appのslugの組を並べる（同名checkを別のAppやworkflowが成功させても通さないため）。
 version: 1
 workspace:
   use_worktree: false
@@ -34,5 +35,6 @@ merge:
   delete_worktree: false
   readiness:
     min_approvals: 1
-    require_checks_passed: true
+    required_checks:
+      - {name: validate, app: github-actions}
     require_no_unresolved_threads: true

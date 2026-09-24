@@ -4,13 +4,15 @@ repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを�
 
 ## こんなときに使う
 
-**AIエージェントへGit作業を任せながら、変更の公開範囲と人間の確認地点をrepositoryごとに固定したいときに使う。** worktree、branch、検証、commit、push、PR、mergeを一つの設定に従って進める。
+**AIエージェントへGit作業を任せながら、変更の公開範囲と人間の確認地点をrepositoryごとに固定したいときに使う。** worktree、branch、検証、commit、push、baseへの追従、PR、mergeを一つの設定に従って進める。
 
 - mainへの直接変更を避け、必ず専用branchまたはworktreeで作業させたい
 - commit、push、PR、mergeのうち、許可する操作だけを明示したい
 - merge直前など、特定の地点だけ人間の承認を必須にしたい
 - repository固有の検証commandが成功した変更だけをcommitさせたい
-- PRの承認、required check、未解決threadを確認してからmergeしたい
+- headがbaseの最新を含み、policyに書いた必須checkが成功し、承認と未解決threadの条件を満たしてからmergeしたい（branch protectionが無いrepositoryでも使える）
+- 作業branchを、履歴を書き換えずにbaseの最新へ追従させたい
+- 「PR 24〜27はmergeしてよい」のような範囲の承認を、操作・対象・期限・発言の原文として渡し、その範囲だけ確認を省きたい
 
 このpluginはGitHubのアクセス権限を設定しない。第三者の直pushや無断mergeを防ぐ設定は、GitHub Ruleset、CODEOWNERS、repository権限で行う。このpluginは、AIエージェント自身の作業手順と停止条件を制御する。
 
@@ -20,7 +22,8 @@ repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを�
 2. エージェントが `inspect` で現況を、`plan` で作業可能かを確認する。
 3. 設定に従ってbranchまたはworktreeを開始する。
 4. 指定commandで検証し、許可された公開操作だけを進める。
-5. human gateがある場合だけ利用者へ承認を求める。
+5. human gateがある場合だけ利用者へ承認を求める。利用者が範囲で許したときは、その範囲を `approval` として渡す。
+6. baseが進んだら `update-branch` で追従し、`merge-readiness` が満たされてからmergeする。
 
 たとえば、次のように依頼できる。
 
@@ -130,10 +133,3 @@ bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/scripts/validate.
 保守用tool（doctor / lint-consumer-contract / evaluate-skills / release / test-hardening / validate-plugin-repository）の実装元は兄弟checkoutの `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools/` の実在を確認してから呼び、無ければ止まる。CIの `validate.yml` も `harness-tools` を兄弟checkoutして `harness-tools/ci/validate.sh` を実行する。呼び方は `../harness-tools/README.md` にある。
 
 [意味評価fixture](evals/scenarios.json)を `harness-tools` の評価runner（`scripts/run-evals.sh`）へ渡した記録は、criterionの真偽を機械の合否にせず、人またはエージェントが根拠付きで評価する。
-
-## 配置と設定の変更（2026-09-16）
-
-- marketplaceの `source` を `./plugins` から `./plugins/agent-work-policy` へ、公開入口を `plugins/playbooks/automation/agent-work-policy` から `plugins/agent-work-policy/skills/agent-work-policy` へ移し、内部plugin `work-policy-control`（skill `apply-work-policy`）を公開入口へ統合した。入口SKILLの名前は `work-with-policy` から `agent-work-policy` へ揃えた。配置変更はinstall identityを変えるため、release時にmajor bumpが要る。
-- policy設定fileの名前を `work-policy-control.config.yml` から `agent-work-policy.config.yml` へ戻し、層を repository の1つだけにした。`~/.config/harness-plugins/work-policy-control.config.yml` と `<repo>/.harness-plugins/work-policy-control.local.yml` は読まれなくなる。
-- 設定解決runtime（`prepare.sh` / `resolve.sh` / `run-config.py` / `state.py`）、`dependencies.yml` による束縛の実行時解決、run専用の一時設定とそのcleanupを撤去した。公開契約の入力（§2）と出力（§3）は、`reason` に `policy_missing` が増え `provider_cleanup_failed` が消えた以外は変わらない。
-- `control.py` の `--config` は解決済みYAMLではなく、対象repository rootのpolicy設定fileの絶対pathを受ける。別repositoryの設定は束縛違反として拒否する。

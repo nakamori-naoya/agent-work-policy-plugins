@@ -88,7 +88,7 @@ fi
 
 # ── 3. 公開入口: SKILL / playbook.yml / CONTRACT.md / scripts ─────────────
 entry_ok=1
-for required in playbook.yml SKILL.md CONTRACT.md scripts/invoke.py scripts/control.py scripts/config.py references/settings.md references/operation-contract.md references/activation.md assets/policy.example.yml; do
+for required in playbook.yml SKILL.md CONTRACT.md scripts/invoke.py scripts/control.py scripts/config.py references/settings.md references/operation-contract.md references/activation.md references/parallel-work.md assets/policy.example.yml; do
   [ -f "$ENTRY/$required" ] || entry_ok=0
 done
 [ "$(skill_frontmatter_name "$ENTRY/SKILL.md")" = "agent-work-policy" ] || entry_ok=0
@@ -253,7 +253,7 @@ elif jq -e '.status=="failed" and .reason=="invalid_input" and (.workspace|keys|
 else
   fail "公開entryの旧output_to拒否結果"
 fi
-for bad in '"action":"verify"' '"action":"inspect","approved":true' '"action":"push","title":"t"' '"contract":"grill/grill","action":"inspect"'; do
+for bad in '"action":"verify"' '"action":"commit","paths":["tracked.txt"],"message":"m","approved":true' '"action":"inspect","approval":{"actions":["merge"],"pull_requests":[1],"until":"2999-01-01T00:00:00+00:00","quote":"q"}' '"action":"push","title":"t"' '"contract":"grill/grill","action":"inspect"'; do
   if printf '{"contract":"agent-work-policy/agent-work-policy","version":1,%s,"repo":"%s"}\n' "$bad" "$DIRECT_REPO" \
       | sed 's/"contract":"agent-work-policy\/agent-work-policy","version":1,"contract"/"version":1,"contract"/' \
       | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-bad.json" 2>/dev/null; then
@@ -277,6 +277,23 @@ if [ "${direct_gate_code:-0}" -eq 3 ] \
   pass "公開entryがgate前に停止しapproval_targetを直接返す"
 else
   fail "公開entryのgate停止と承認対象"
+fi
+
+# 承認範囲の外なら同じくgateで止まり、外れた要素を approval_target に添える。
+printf '{"contract":"agent-work-policy/agent-work-policy","version":1,"action":"commit","repo":"%s","paths":["tracked.txt"],"message":"test","approval":{"actions":["commit"],"branches":["agent/other"],"until":"2999-01-01T00:00:00+00:00","quote":"agent/otherのcommitは許可"}}\n' "$DIRECT_REPO" \
+  | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-outside.json" 2>/dev/null
+if jq -e '.status=="waiting_for_human" and .approval_target.outside_approval==["branch"]' "$TMP_ROOT/direct-outside.json" >/dev/null \
+  && git -C "$DIRECT_REPO" diff --cached --quiet; then
+  pass "承認範囲の外の実行はgateで止まり、外れた要素を返す"
+else
+  fail "承認範囲の外の実行: $(cat "$TMP_ROOT/direct-outside.json")"
+fi
+printf '{"contract":"agent-work-policy/agent-work-policy","version":1,"action":"commit","repo":"%s","paths":["tracked.txt"],"message":"test","approval":{"actions":["commit"],"branches":["agent/direct-contract"],"until":"2999-01-01T00:00:00+00:00","quote":"agent/direct-contractのcommitは許可"}}\n' "$DIRECT_REPO" \
+  | python3 "$PUBLIC_ENTRY" > "$TMP_ROOT/direct-approved.json" 2>/dev/null
+if jq -e '.status=="completed" and .operation_result.branch=="agent/direct-contract"' "$TMP_ROOT/direct-approved.json" >/dev/null; then
+  pass "承認範囲に入る実行はgateを通る"
+else
+  fail "承認範囲に入る実行: $(cat "$TMP_ROOT/direct-approved.json")"
 fi
 
 # permission拒否は承認待ちへ変えず、外部CLIへ進まない。
@@ -393,7 +410,7 @@ def policy():
         "verification": {"commands": ["git diff --check"]},
         "pull_request": {"draft": True},
         "merge": {"method": "squash", "delete_branch": False, "delete_worktree": False,
-                  "readiness": {"min_approvals": 1, "require_checks_passed": True, "require_no_unresolved_threads": True}},
+                  "readiness": {"min_approvals": 1, "required_checks": [{"name": "validate", "app": "github-actions"}], "require_no_unresolved_threads": True}},
     }
 def rejects(cfg):
     out = io.StringIO()
@@ -416,6 +433,43 @@ bad = policy(); bad["version"] = 2; assert "version" in rejects(bad)
 bad = policy(); bad["merge"]["method"] = "fast-forward"; assert "fast-forward" in rejects(bad)
 bad = policy(); bad["merge"]["delete_worktree"] = True; assert "delete_worktree" in rejects(bad)
 bad = policy(); bad["verification"]["commands"] = [""]; assert "型が不正" in rejects(bad)
+bad = policy(); bad["merge"]["readiness"]["required_checks"] = []; assert "required_checks" in rejects(bad)  # 反例: 必須checkの宣言が無い
+bad = policy(); bad["merge"]["readiness"]["required_checks"] = ["validate"]; assert "型が不正" in rejects(bad)  # 反例: 報告元Appの無い名前だけの宣言
+bad = policy(); bad["merge"]["readiness"]["required_checks"] = [{"name": "validate", "app": "github-actions"}] * 2; assert "required_checks" in rejects(bad)
+bad = policy(); bad["merge"]["readiness"]["require_checks_passed"] = True; assert "一致しない" in rejects(bad)  # 反例: 廃止したkey
+
+# 必須checkは名前と報告元Appの組で判定する
+runs = [{"name": "validate", "app": "github-actions", "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "2026-09-24T00:00:00Z"}]
+rollup = [{"name": "validate", "conclusion": "SUCCESS"}]
+need = [{"name": "validate", "app": "github-actions"}]
+assert control.checks_passed(rollup, runs, need)
+assert not control.checks_passed(rollup, [{**runs[0], "app": "impostor"}], need)  # 反例: 同名checkを別のAppが成功させた
+assert not control.checks_passed([], runs, need)  # 反例: 最後のPR snapshotで成功が見えない
+older_failure = [{**runs[0], "conclusion": "FAILURE", "completedAt": "2026-09-23T00:00:00Z"}, runs[0]]
+assert control.checks_passed(rollup, older_failure, need)  # 境界例: 再実行で最新が成功なら成功
+
+# update-branch の公開結果
+assert module.map_completed_operation("update-branch", {"status": "updated", "pr": 7, "changed": True, "sha": "a" * 40}, cfg) == {"pull_request": 7, "changed": True, "sha": "a" * 40}
+
+# 承認範囲: 形の検査と、action・対象・期限の照合
+from datetime import datetime, timezone
+scope = {"actions": ["merge"], "pull_requests": [24, 25], "until": "2026-09-25T00:00:00+09:00", "quote": "PR 24と25はマージしていいよ"}
+assert module.approval_shape_problem(scope) is None
+now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+assert module.approval_mismatch(scope, "merge", 25, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == []  # 正例
+assert module.approval_mismatch(scope, "merge", 28, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == ["pull_request"]  # 反例: 範囲外のPR
+assert module.approval_mismatch(scope, "push", None, "agent/x", datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == ["action", "branch"]
+assert module.approval_mismatch(scope, "merge", 24, None, datetime(2026, 9, 24, 15, 0, tzinfo=timezone.utc)) == ["until"]  # 境界例: 期限ちょうどは範囲外
+for broken in (
+    {**scope, "until": "2026-09-25T00:00:00"},  # 時差の無い時刻
+    {**scope, "until": "session"},
+    {k: v for k, v in scope.items() if k != "quote"},
+    {**scope, "quote": " "},
+    {**scope, "actions": ["inspect"]},  # gateの無いaction
+    {k: v for k, v in scope.items() if k != "pull_requests"},  # 対象の列挙が無い
+    {**scope, "scope": "危険でない限り"},  # 列挙できない範囲
+):
+    assert module.approval_shape_problem(broken) is not None, broken
 PY
 then
   pass "公開結果のaction別写像、型境界、内部JSON不正、policy schemaの正例・反例・境界例"
