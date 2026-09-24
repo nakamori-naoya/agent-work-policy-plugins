@@ -18,7 +18,7 @@ policy設定は、対象repository rootの `.harness-plugins/agent-work-policy.c
 gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[] | {name, app: .app.slug}'
 ```
 
-必須checkの状態は、完了して失敗したもの（`checks_failed`）、まだ完了していないもの（`checks_pending`）、その名前とAppの組が一度も報告されていないもの（`checks_missing`）に分けて返る。pendingなら待って確かめ直し、failedなら直す作業へ戻り、missingならpolicyの名前かAppが実際の報告と合っているかを確かめる。
+必須checkの状態は、完了して失敗したもの（`checks_failed`）、まだ完了していないか、pushの直後や前のjobを待つ間でまだ作られていないもの（`checks_pending`）、headのcheck suiteがすべて完了したのにその名前とAppの組が報告されなかったもの（`checks_missing`）に分けて返る。pendingなら待って確かめ直し、failedなら直す作業へ戻り、missingならpolicyの名前かAppが実際の報告と合っているかを確かめる。
 
 このほか、`merge.readiness.min_approvals` は最新reviewのApprove数、`merge.readiness.require_no_unresolved_threads` は未解決review threadが0件であることを求める。承認数が0のpolicyでGitHubが `BLOCKED` を返したときは、実際に当たるRulesetをすべて現在の利用者がPR経由でbypassできる場合に限り、承認不足による `BLOCKED` を許す。必須checkと未解決threadはbypassしない。
 

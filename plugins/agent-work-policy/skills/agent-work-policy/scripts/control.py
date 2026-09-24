@@ -613,7 +613,7 @@ query($owner:String!,$name:String!,$oid:GitObjectID!){
   repository(owner:$owner,name:$name){
     object(oid:$oid){... on Commit{
       checkSuites(first:100){
-        nodes{app{slug} checkRuns(first:100){nodes{name status conclusion startedAt completedAt} pageInfo{hasNextPage}}}
+        nodes{status app{slug} checkRuns(first:100){nodes{name status conclusion startedAt completedAt} pageInfo{hasNextPage}}}
         pageInfo{hasNextPage}
       }
     }}
@@ -635,6 +635,7 @@ query($owner:String!,$name:String!,$oid:GitObjectID!){
     if nodes is None or (suites.get("pageInfo") or {}).get("hasNextPage"):
         emit({"error": "check suiteを完全に取得できない"}, 2)
     runs = []
+    settled = bool(nodes) and all(str((suite or {}).get("status") or "").upper() == "COMPLETED" for suite in nodes)
     for suite in nodes:
         check_runs = (suite or {}).get("checkRuns") or {}
         if (check_runs.get("pageInfo") or {}).get("hasNextPage"):
@@ -642,18 +643,20 @@ query($owner:String!,$name:String!,$oid:GitObjectID!){
         app = ((suite or {}).get("app") or {}).get("slug")
         for run in check_runs.get("nodes") or []:
             runs.append({**run, "app": app})
-    return runs
+    return {"runs": runs, "settled": settled}
 
 
-def check_state(rollup, check_runs, required_checks):
+def check_state(rollup, checks, required_checks):
     """policyが宣言した必須checkの状態を、成功・失敗・実行中・未報告の一つへまとめる。
 
     各必須check（名前と報告元Appの組）について、head commitの最新のcheck runを見る。名前だけでは別のAppや
     workflowが同名のcheckを成功させられるので、報告元のApp slugまで照合する。成功と数えるのは、最新のrunが
     完了して成功し、最後に取り直したPRのcheck rollupでも同じ名前が成功しているときだけである。
-    一件でも完了して失敗していれば failed、失敗は無いが完了していないものがあれば pending、
-    その名前とAppの組のrunが一件も無ければ missing を返す。
+    一件でも完了して失敗していれば failed を返す。次に、完了していないrunがあるか、その名前とAppの組のrunが
+    まだ無いのにhead commitのcheck suiteが揃って完了していなければ（pushの直後や、前のjobを待つjob）、pending を返す。
+    check suiteがすべて完了してもその組のrunが無いときだけ、報告されないことが確定したとして missing を返す。
     """
+    check_runs, settled = checks["runs"], checks["settled"]
     rollup_success, rollup_failed = set(), set()
     for item in rollup or []:
         name = item.get("name") or item.get("context")
@@ -674,7 +677,7 @@ def check_state(rollup, check_runs, required_checks):
     for required in required_checks:
         found = latest.get((required["name"], required["app"]))
         if found is None:
-            states.add("missing")
+            states.add("missing" if settled else "pending")
             continue
         run = found[1]
         if str(run.get("status") or "").upper() != "COMPLETED":
@@ -685,7 +688,7 @@ def check_state(rollup, check_runs, required_checks):
             states.add("failed")
         elif required["name"] not in rollup_success:
             states.add("pending")
-    for state in ("failed", "missing", "pending"):
+    for state in ("failed", "pending", "missing"):
         if state in states:
             return state
     return "passed"

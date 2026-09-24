@@ -193,7 +193,7 @@ elif [ "$1" = api ] && [[ " $* " == *' graphql '* ]] && [[ " $* " == *'checkSuit
     if [ "${FAKE_GH_MODE:-}" = second-view-check-failed ] && [ "$(cat "${FAKE_VIEW_COUNT:-/dev/null}" 2>/dev/null || printf '0')" -ge 2 ]; then
       check_conclusion=FAILURE
     fi
-    suites='[{"app":{"slug":"'"${FAKE_CHECK_APP:-github-actions}"'"},"checkRuns":{"nodes":[{"name":"gitleaks","status":"'"${FAKE_CHECK_STATUS:-COMPLETED}"'","conclusion":"'"$check_conclusion"'"},{"name":"trufflehog","status":"COMPLETED","conclusion":"SUCCESS"}],"pageInfo":{"hasNextPage":'"${FAKE_CHECK_RUNS_NEXT:-false}"'}}}]'
+    suites='[{"status":"'"${FAKE_SUITE_STATUS:-COMPLETED}"'","app":{"slug":"'"${FAKE_CHECK_APP:-github-actions}"'"},"checkRuns":{"nodes":[{"name":"gitleaks","status":"'"${FAKE_CHECK_STATUS:-COMPLETED}"'","conclusion":"'"$check_conclusion"'"},{"name":"trufflehog","status":"COMPLETED","conclusion":"SUCCESS"}],"pageInfo":{"hasNextPage":'"${FAKE_CHECK_RUNS_NEXT:-false}"'}}}]'
   fi
   if [ "${FAKE_CHECK_DATA_ERRORS:-false}" = true ]; then errors=',"errors":[{"message":"fixture"}]'; else errors=''; fi
   printf '{"data":{"repository":{"object":{"checkSuites":{"nodes":%s,"pageInfo":{"hasNextPage":%s}}}}}%s}\n' "$suites" "${FAKE_CHECK_SUITES_NEXT:-false}" "$errors"
@@ -471,7 +471,9 @@ if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .behind_base==1 and (.reaso
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_BEHIND_BY=0 FAKE_PR_MERGE_STATE=BEHIND python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 0 ] && jq -e '.status=="ready" and .behind_base==0' <<<"$output" >/dev/null; then ok "head containing the base tip is judged by compare, not by mergeStateStatus"; else ng "compare-based behind_base: $output"; fi
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_RUNS_EMPTY=true python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
-if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("checks_missing"))' <<<"$output" >/dev/null; then ok "empty app check runs are missing"; else ng "empty app check runs fail open"; fi
+if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("checks_pending"))' <<<"$output" >/dev/null; then ok "no check suite yet (right after a push) is pending"; else ng "no check suite yet: $output"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_APP=impostor-app FAKE_SUITE_STATUS=IN_PROGRESS python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '(.reasons | index("checks_pending")) and (.reasons | index("checks_missing") | not)' <<<"$output" >/dev/null; then ok "required run not yet created while a suite is running is pending"; else ng "unsettled suite: $output"; fi
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_STATUS=IN_PROGRESS FAKE_CHECK_CONCLUSION= python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 3 ] && jq -e '.checks=="pending" and (.reasons | index("checks_pending")) and (.reasons | index("checks_failed") | not)' <<<"$output" >/dev/null; then ok "running required check is pending"; else ng "running check: $output"; fi
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_CHECK_CONCLUSION=FAILURE python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")

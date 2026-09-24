@@ -442,13 +442,18 @@ bad = policy(); bad["merge"]["readiness"]["require_checks_passed"] = True; asser
 runs = [{"name": "validate", "app": "github-actions", "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "2026-09-24T00:00:00Z"}]
 rollup = [{"name": "validate", "conclusion": "SUCCESS"}]
 need = [{"name": "validate", "app": "github-actions"}]
-assert control.check_state(rollup, runs, need) == "passed"
-assert control.check_state(rollup, [{**runs[0], "app": "impostor"}], need) == "missing"  # 反例: 同名checkを別のAppが成功させた
-assert control.check_state([], runs, need) == "pending"  # 境界例: 最後のPR snapshotでまだ成功が見えない
-assert control.check_state(rollup, [{**runs[0], "status": "IN_PROGRESS", "conclusion": None}], need) == "pending"
-assert control.check_state(rollup, [{**runs[0], "conclusion": "FAILURE"}], need) == "failed"
+done = lambda items: {"runs": items, "settled": True}
+assert control.check_state(rollup, done(runs), need) == "passed"
+assert control.check_state(rollup, done([{**runs[0], "app": "impostor"}]), need) == "missing"  # 反例: 同名checkを別のAppが成功させ、suiteは揃って完了した
+assert control.check_state(rollup, {"runs": [{**runs[0], "app": "impostor"}], "settled": False}, need) == "pending"  # 境界例: suiteが走っている間はまだ作られていないだけ
+assert control.check_state(rollup, {"runs": [], "settled": False}, need) == "pending"  # 境界例: pushの直後でsuiteがまだ無い
+assert control.check_state([], done(runs), need) == "pending"  # 境界例: 最後のPR snapshotでまだ成功が見えない
+assert control.check_state(rollup, done([{**runs[0], "status": "IN_PROGRESS", "conclusion": None}]), need) == "pending"
+assert control.check_state(rollup, done([{**runs[0], "conclusion": "FAILURE"}]), need) == "failed"
+two = need + [{"name": "lint", "app": "github-actions"}]
+assert control.check_state(rollup, {"runs": [{**runs[0], "status": "IN_PROGRESS", "conclusion": None}], "settled": True}, two) == "pending"  # 実行中と未報告が並ぶときは pending を先に返す
 older_failure = [{**runs[0], "conclusion": "FAILURE", "completedAt": "2026-09-23T00:00:00Z"}, runs[0]]
-assert control.check_state(rollup, older_failure, need) == "passed"  # 境界例: 再実行で最新が成功なら成功
+assert control.check_state(rollup, done(older_failure), need) == "passed"  # 境界例: 再実行で最新が成功なら成功
 
 # update-branch の公開結果
 assert module.map_completed_operation("update-branch", {"status": "updated", "pr": 7, "changed": True, "sha": "a" * 40}, cfg) == {"pull_request": 7, "changed": True, "sha": "a" * 40}
