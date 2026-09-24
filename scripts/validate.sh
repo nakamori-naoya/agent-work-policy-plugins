@@ -462,6 +462,8 @@ assert module.map_completed_operation("update-branch", {"status": "updated", "pr
 from datetime import datetime, timezone
 scope = {"actions": ["merge"], "pull_requests": [24, 25], "until": "2026-09-25T00:00:00+09:00", "quote": ["PR 24と25はマージしていいよ"]}
 assert control.approval_problem(scope, None) is None
+assert control.approval_problem({**scope, "actions": ["merge", "ready-for-review"]}, None) is None  # 境界例: 他のpackageの確認の名前が並んでいても受け取る
+assert control.approval_mismatch({**scope, "actions": ["ready-for-review"]}, "merge", 25, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == ["action"]
 now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 assert control.approval_mismatch(scope, "merge", 25, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == []  # 正例
 assert control.approval_mismatch(scope, "merge", 28, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == ["pull_request"]  # 反例: 範囲外のPR
@@ -474,7 +476,7 @@ for broken in (
     {**scope, "quote": " "},
     {**scope, "quote": []},
     {**scope, "quote": ["原文", ""]},
-    {**scope, "actions": ["inspect"]},  # gateの無いaction
+    {**scope, "actions": [""]},  # 空の名前
     {k: v for k, v in scope.items() if k != "pull_requests"},  # 対象の列挙が無い
     {**scope, "scope": "危険でない限り"},  # 列挙できない範囲
 ):

@@ -56,7 +56,7 @@ actionごとに使うキーは次のとおりである。`branch`、`message`、
 
 人の承認は、操作（`actions`）、対象、期限（`until`）、利用者の発言の原文（`quote`）を持つ範囲として渡す。1回だけの承認も同じ形で、範囲が1操作に縮むだけである。
 
-`actions` はgateのあるaction（`commit`、`push`、`update-branch`、`pull-request`、`merge`）の重複の無い非空配列である。`update-branch` はpushと同じgateに従うが、承認の上では別の操作であり、`push` を許しても `update-branch` は許したことにならない。対象は、mergeならPR番号の配列 `pull_requests`、それ以外なら作業branchの配列 `branches` で、少なくとも一方を持つ。`branches` の要素は、末尾が `/` ならprefixとして、それ以外は名前の完全一致で照合する。prefixを使えば、これから作る名前の分からない作業branchをまとめて許せる。どの要素もpolicyの作業branchの接頭辞で始まらなければならず、base branchを指せない。`until` は時差付きのISO 8601時刻で、その時刻ちょうどからは範囲外である。
+`actions` は許す操作の名前の重複の無い非空配列である。このproviderが照合するのはgateのあるaction（`commit`、`push`、`update-branch`、`pull-request`、`merge`）だけで、それ以外の名前（他のpackageの人の確認の名前など）は無視する。利用者の一つの発言から一つの `approval` を作り、それを使う複数のpackageへそのまま渡せるようにするためである。`update-branch` はpushと同じgateに従うが、承認の上では別の操作であり、`push` を許しても `update-branch` は許したことにならない。対象は、mergeならPR番号の配列 `pull_requests`、それ以外なら作業branchの配列 `branches` で、少なくとも一方を持つ。`branches` の要素は、末尾が `/` ならprefixとして、それ以外は名前の完全一致で照合する。prefixを使えば、これから作る名前の分からない作業branchをまとめて許せる。どの要素もpolicyの作業branchの接頭辞で始まらなければならず、base branchを指せない。`until` は時差付きのISO 8601時刻で、その時刻ちょうどからは範囲外である。
 
 `quote` には、範囲を与えた利用者の発言を原文のまま、発言の順に並べる。利用者の発言が「危険でない限り」のように列挙できない範囲なら、agentは操作・対象・期限へ言い換えたものを利用者に示し、同意を得てから `approval` にする。このときの `quote` は、範囲を与えた最初の発言と、言い換えへの同意の発言を順に並べたものである。後から照合する人は、この二つから範囲がどう導かれたかを再構成できる。
 
