@@ -328,8 +328,8 @@ def approval_problem(approval, cfg):
     if not isinstance(approval, dict) or not set(approval) <= APPROVAL_KEYS:
         return "must be an object with actions, pull_requests or branches, until, quote"
     actions = approval.get("actions")
-    if not isinstance(actions, list) or not actions or any(item not in GATES for item in actions) or len(actions) != len(set(actions)):
-        return "actions must be unique gated actions"
+    if not isinstance(actions, list) or not actions or any(not isinstance(item, str) or not item.strip() for item in actions) or len(actions) != len(set(actions)):
+        return "actions must be unique non-empty names"
     if "pull_requests" not in approval and "branches" not in approval:
         return "must enumerate pull_requests or branches"
     prs = approval.get("pull_requests", [])
@@ -1177,7 +1177,7 @@ def do_ready_for_review(cfg, args):
 def do_update_branch(cfg, args):
     """baseの現在の先端を、GitHub上で作業branchへmergeして取り込み、localを同じcommitへ進める。
 
-    履歴を書き換えないので他者のpushを上書きしない。公開済みのbaseを取り込むだけなのでgateは持たない。
+    履歴を書き換えないので他者のpushを上書きしない。remoteの作業branchを進めるので、pushと同じpermissionと before_push のgateに従う。
     """
     root = bound_repo_root(cfg, args.repo)
     permission(cfg, "push")
