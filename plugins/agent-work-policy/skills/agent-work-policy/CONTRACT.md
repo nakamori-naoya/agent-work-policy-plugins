@@ -109,7 +109,7 @@ reason: ""
 | `merge` | `{pull_request, merged, method, sha}` |
 | `cleanup` | `{pull_request, branch_deleted, worktree_deleted}` |
 
-`merge-readiness` と `inspect` は照会であり、否定的な観測結果でも `status: completed` を返す。`merge-readiness` の `unmet` は満たさない条件の名前である。消費側が次の行動を選ぶのに使う名前は、`behind_base`（headがbaseの先端を含まない。`update-branch` で追従する）、`checks_pending`（必須checkが完了していない。待って確かめ直す）、`checks_failed`（必須checkが完了して失敗した。直す作業へ戻る）、`checks_missing`（必須checkがそのheadで報告されていない。policyのcheck名と報告元Appが実際の報告と合っているかを確かめる）、`approvals`、`unresolved_threads` である。
+`merge-readiness` と `inspect` は照会であり、否定的な観測結果でも `status: completed` を返す。`merge-readiness` の `unmet` は満たさない条件の名前である。消費側が次の行動を選ぶのに使う名前は、`behind_base`（headがbaseの先端を含まない。`update-branch` で追従する）、`checks_pending`（必須checkが完了していないか、pushの直後でまだ作られていない。待って確かめ直す）、`checks_failed`（必須checkが完了して失敗した。直す作業へ戻る）、`checks_missing`（headのcheck suiteがすべて完了したのに必須checkが報告されなかった。待っても変わらないので、policyのcheck名と報告元Appが実際の報告と合っているかを確かめる）、`approvals`、`unresolved_threads` である。
 
 ### 3.3 `workspace`
 
