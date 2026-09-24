@@ -1,7 +1,7 @@
 {
   "name": "agent-work-policy",
-  "version": "4.0.0",
-  "description": "Git作業の1操作を、repositoryのpolicyのpermissionとhuman gateに従って実行する公開playbook agent-work-policyを提供する",
+  "version": "5.0.0",
+  "description": "Git作業の1操作を、repositoryのpolicyのpermission・human gate・必須checkに従って実行する公開playbook agent-work-policyを提供する",
   "author": {
     "name": "NaoyaNakamori"
   },
@@ -27,6 +27,7 @@
             "start",
             "commit",
             "push",
+            "update-branch",
             "pull-request",
             "ready-for-review",
             "merge-readiness",

@@ -51,6 +51,8 @@ def require_success(proc, operation, code=3):
 
 
 POLICY_FILE = ".harness-plugins/agent-work-policy.config.yml"
+# required_checks の要素は {name: check名, app: 報告元GitHub Appのslug}。leafではなくlistとして扱う。
+CHECK_LIST = "check_list"
 # policy設定fileのschema（CONTRACT.md §5.1）。leaf keyの集合を完全一致で検査する。
 POLICY_SCHEMA = {
     "version": int,
@@ -74,7 +76,7 @@ POLICY_SCHEMA = {
     "merge.delete_branch": bool,
     "merge.delete_worktree": bool,
     "merge.readiness.min_approvals": int,
-    "merge.readiness.require_checks_passed": bool,
+    "merge.readiness.required_checks": CHECK_LIST,
     "merge.readiness.require_no_unresolved_threads": bool,
 }
 MERGE_METHODS = ("squash", "merge", "rebase", "fast-forward")
@@ -107,6 +109,15 @@ def validate_policy(cfg, path):
             emit({"error": "policy設定の型が不正", "config": path, "key": key, "expected": "string"}, 2)
         if expected is list and (not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value)):
             emit({"error": "policy設定の型が不正", "config": path, "key": key, "expected": "string[]"}, 2)
+        if expected is CHECK_LIST and not (
+            isinstance(value, list)
+            and all(
+                isinstance(item, dict) and set(item) == {"name", "app"}
+                and all(isinstance(item[field], str) and item[field] for field in ("name", "app"))
+                for item in value
+            )
+        ):
+            emit({"error": "policy設定の型が不正", "config": path, "key": key, "expected": "{name, app}[]"}, 2)
     if cfg["version"] != 1:
         emit({"error": "policy設定のversionは1だけを受け付ける", "config": path, "version": cfg["version"]}, 2)
     for key in ("workspace.base_branch", "workspace.branch_prefix", "git.remote", "merge.method"):
@@ -120,6 +131,10 @@ def validate_policy(cfg, path):
         emit({"error": "merge.delete_worktree: trueはworkspace.use_worktree: trueのときだけ有効", "config": path}, 2)
     if cfg["merge"]["readiness"]["min_approvals"] < 0:
         emit({"error": "merge.readiness.min_approvalsは0以上", "config": path}, 2)
+    required_checks = cfg["merge"]["readiness"]["required_checks"]
+    pairs = [(item["name"], item["app"]) for item in required_checks]
+    if not pairs or len(pairs) != len(set(pairs)):
+        emit({"error": "merge.readiness.required_checksは重複の無い非空配列", "config": path}, 2)
     return cfg
 
 
@@ -552,20 +567,11 @@ def branch_protection(root, repo_name, base):
     )
 
 
-def required_checks(protection):
+def protected_check_names(protection):
     status = protection.get("required_status_checks") or {}
-    checks = status.get("checks") or []
-    if checks:
-        return [
-            {"context": item.get("context"), "app_id": item.get("app_id"), "kind": "check_run"}
-            for item in checks
-            if item and item.get("context")
-        ]
-    return [
-        {"context": context, "app_id": None, "kind": "context"}
-        for context in (status.get("contexts") or [])
-        if context
-    ]
+    names = {item.get("context") for item in status.get("checks") or [] if item and item.get("context")}
+    names.update(context for context in status.get("contexts") or [] if context)
+    return names
 
 
 def commit_check_runs(root, repo_name, head_sha):
@@ -575,7 +581,7 @@ query($owner:String!,$name:String!,$oid:GitObjectID!){
   repository(owner:$owner,name:$name){
     object(oid:$oid){... on Commit{
       checkSuites(first:100){
-        nodes{app{databaseId} checkRuns(first:100){nodes{name status conclusion startedAt completedAt} pageInfo{hasNextPage}}}
+        nodes{app{slug} checkRuns(first:100){nodes{name status conclusion startedAt completedAt} pageInfo{hasNextPage}}}
         pageInfo{hasNextPage}
       }
     }}
@@ -601,52 +607,57 @@ query($owner:String!,$name:String!,$oid:GitObjectID!){
         check_runs = (suite or {}).get("checkRuns") or {}
         if (check_runs.get("pageInfo") or {}).get("hasNextPage"):
             emit({"error": "check runを完全に取得できない"}, 2)
-        app_id = ((suite or {}).get("app") or {}).get("databaseId")
+        app = ((suite or {}).get("app") or {}).get("slug")
         for run in check_runs.get("nodes") or []:
-            runs.append({**run, "app_id": app_id})
+            runs.append({**run, "app": app})
     return runs
 
 
-def checks_passed(rollup, requirements, check_runs):
-    if not requirements:
-        return False
-    successful_contexts = set()
-    for item in rollup or []:
-        conclusion = str(item.get("conclusion") or item.get("state") or "").upper()
-        if conclusion == "SUCCESS":
-            name = item.get("name") or item.get("context")
-            if name:
-                successful_contexts.add(name)
-    latest_runs = {}
-    for item in check_runs or []:
-        key = (item.get("name"), item.get("app_id"))
-        if not key[0] or key[1] is None:
-            continue
-        order = item.get("completedAt") or item.get("startedAt") or ""
-        previous = latest_runs.get(key)
-        if previous is None or order >= previous[0]:
-            latest_runs[key] = (order, item)
-    successful_runs = {
-        key
-        for key, (_, item) in latest_runs.items()
-        if str(item.get("status") or "").upper() == "COMPLETED"
-        and str(item.get("conclusion") or "").upper() == "SUCCESS"
+def checks_passed(rollup, check_runs, required_checks):
+    """policyが宣言した各check（名前と報告元Appの組）の最新のrunが、head commitで完了し成功していること。
+
+    名前だけでは別のAppやworkflowが同名のcheckを成功させられるので、報告元のApp slugまで照合する。
+    最後に取り直したPRのcheck rollupでも同じ名前が成功していることを要求し、取得の間の変化を拾う。
+    """
+    rollup_success = {
+        item.get("name") or item.get("context")
+        for item in rollup or []
+        if str(item.get("conclusion") or item.get("state") or "").upper() == "SUCCESS"
     }
-    for required in requirements:
-        context = required["context"]
-        if required["kind"] == "context":
-            if context not in successful_contexts:
-                return False
+    latest = {}
+    for run in check_runs or []:
+        key = (run.get("name"), run.get("app"))
+        if not key[0] or not key[1]:
             continue
-        if context not in successful_contexts:
+        order = run.get("completedAt") or run.get("startedAt") or ""
+        if key not in latest or order >= latest[key][0]:
+            latest[key] = (order, run)
+    for required in required_checks:
+        found = latest.get((required["name"], required["app"]))
+        if found is None or required["name"] not in rollup_success:
             return False
-        app_id = required.get("app_id")
-        if app_id is None or app_id == -1:
-            if not any(name == context for name, _ in successful_runs):
-                return False
-        elif (context, app_id) not in successful_runs:
+        run = found[1]
+        if str(run.get("status") or "").upper() != "COMPLETED" or str(run.get("conclusion") or "").upper() != "SUCCESS":
             return False
     return True
+
+
+def base_tip_sha(root, repo_name, base):
+    """PRの baseRefOid は古い値を返し得るので、base branchの現在の先端をrefから取り直す。"""
+    data = gh_json(["api", f"repos/{repo_name}/git/ref/heads/{base}"], root, "base-tip")
+    sha = (data.get("object") or {}).get("sha") if isinstance(data, dict) else None
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        emit({"error": "base branchの先端SHAを取得できない", "base_branch": base}, 2)
+    return sha
+
+
+def commits_behind(root, repo_name, base_tip, head_sha):
+    """headが含まないbase側のcommit数。0ならheadはbaseの先端を含む。"""
+    data = gh_json(["api", f"repos/{repo_name}/compare/{base_tip}...{head_sha}?per_page=1"], root, "compare-base")
+    behind = data.get("behind_by") if isinstance(data, dict) else None
+    if type(behind) is not int or behind < 0:
+        emit({"error": "baseとheadの比較結果を読めない", "base_sha": base_tip, "head_sha": head_sha}, 2)
+    return behind
 
 
 def unresolved_threads(root, repo_name, pr_number):
@@ -741,12 +752,13 @@ def pull_request_ruleset_bypass(root, repo_name, base, merge_method, required):
 def merge_readiness(cfg, root, pr_number, info=None):
     info = info or repository_info(cfg, root)
     expected_repo = info["nameWithOwner"]
-    initial_state = pull_request_state(cfg, root, expected_repo, pr_number)
-    initial_view = initial_state["view"]
+    initial_view = pull_request_state(cfg, root, expected_repo, pr_number)["view"]
     required = cfg["merge"]["readiness"]
-    protection = branch_protection(root, expected_repo, initial_view.get("baseRefName"))
-    requirements = required_checks(protection) if required["require_checks_passed"] else []
-    check_runs = commit_check_runs(root, expected_repo, initial_view.get("headRefOid")) if any(item["kind"] == "check_run" for item in requirements) else []
+    fast_forward = cfg["merge"]["method"] == "fast-forward"
+    protection = branch_protection(root, expected_repo, initial_view.get("baseRefName")) if fast_forward else {}
+    base_tip = base_tip_sha(root, expected_repo, initial_view.get("baseRefName"))
+    behind = commits_behind(root, expected_repo, base_tip, initial_view.get("headRefOid"))
+    check_runs = commit_check_runs(root, expected_repo, initial_view.get("headRefOid"))
     unresolved = unresolved_threads(root, expected_repo, pr_number) if required["require_no_unresolved_threads"] else None
     ruleset_bypass = {"authorized": False, "ruleset_ids": [], "reason": "not_required"}
     if (
@@ -781,13 +793,15 @@ def merge_readiness(cfg, root, pr_number, info=None):
                 reasons.append(reason)
     if initial_view.get("baseRefName") != cfg["workspace"]["base_branch"]:
         reasons.append("initial_base_branch_mismatch")
+    if behind:
+        reasons.append("behind_base")
     if view.get("isDraft"):
         reasons.append("draft")
     if view.get("state") != "OPEN":
         reasons.append(f"state:{view.get('state')}")
     if view.get("mergeable") != "MERGEABLE":
         reasons.append(f"mergeable:{view.get('mergeable')}")
-    if view.get("mergeStateStatus") != "CLEAN" and not (
+    if view.get("mergeStateStatus") not in {"CLEAN", "BEHIND"} and not (
         view.get("mergeStateStatus") == "BLOCKED"
         and ruleset_bypass["authorized"]
     ):
@@ -801,20 +815,21 @@ def merge_readiness(cfg, root, pr_number, info=None):
         reasons.append("cross_repository")
     if approvals < required["min_approvals"]:
         reasons.append("approvals")
-    passed = checks_passed(view.get("statusCheckRollup"), requirements, check_runs) if required["require_checks_passed"] else True
-    if required["require_checks_passed"] and not passed:
+    passed = checks_passed(view.get("statusCheckRollup"), check_runs, required["required_checks"])
+    if not passed:
         reasons.append("checks")
     protected_reviews = protection.get("required_pull_request_reviews") or {}
     protected_approvals = protected_reviews.get("required_approving_review_count") or 0
-    protect_fast_forward = cfg["merge"]["method"] == "fast-forward"
-    if protect_fast_forward and required["min_approvals"] > protected_approvals:
-        reasons.append("protection:approvals")
-    conversation_protected = bool((protection.get("required_conversation_resolution") or {}).get("enabled"))
-    if protect_fast_forward and required["require_no_unresolved_threads"] and not conversation_protected:
-        reasons.append("protection:conversation_resolution")
-    admins_protected = bool((protection.get("enforce_admins") or {}).get("enabled"))
-    if protect_fast_forward and not admins_protected:
-        reasons.append("protection:admins")
+    if fast_forward:
+        if not {item["name"] for item in required["required_checks"]} <= protected_check_names(protection):
+            reasons.append("protection:required_checks")
+        if required["min_approvals"] > protected_approvals:
+            reasons.append("protection:approvals")
+        conversation_protected = bool((protection.get("required_conversation_resolution") or {}).get("enabled"))
+        if required["require_no_unresolved_threads"] and not conversation_protected:
+            reasons.append("protection:conversation_resolution")
+        if not bool((protection.get("enforce_admins") or {}).get("enabled")):
+            reasons.append("protection:admins")
     if required["require_no_unresolved_threads"] and unresolved:
         reasons.append("unresolved_threads")
     return {
@@ -824,14 +839,12 @@ def merge_readiness(cfg, root, pr_number, info=None):
         "head_branch": view.get("headRefName"),
         "head_sha": view.get("headRefOid"),
         "base_branch": view.get("baseRefName"),
-        "base_sha": view.get("baseRefOid"),
+        "base_sha": base_tip,
+        "behind_base": behind,
         "approvals": approvals,
         "required_approvals": required["min_approvals"],
         "checks_passed": passed,
-        "required_checks": requirements,
-        "protected_approvals": protected_approvals,
-        "conversation_resolution_protected": conversation_protected,
-        "admins_protected": admins_protected,
+        "required_checks": required["required_checks"],
         "unresolved_threads": unresolved,
         "ruleset_bypass": ruleset_bypass,
         "reasons": reasons,
@@ -1020,8 +1033,7 @@ def do_ready_for_review(cfg, args):
     remote_head = next((line.partition("\t")[0] for line in probe.stdout.splitlines()), None)
     if remote_head != local_head:
         emit({"status": "failed", "action": "pull_request", "pr": args.pr, "reason": "remote_head_mismatch"}, 3)
-    state = pull_request_state(cfg, root, info["nameWithOwner"], args.pr, branch)
-    view = state["view"]
+    view = pull_request_state(cfg, root, info["nameWithOwner"], args.pr, branch)["view"]
     result = {
         "action": "pull_request",
         "pr": args.pr,
@@ -1029,27 +1041,93 @@ def do_ready_for_review(cfg, args):
         "head_branch": view.get("headRefName"),
         "base_branch": view.get("baseRefName"),
     }
-    if not state["pr_number_matches"]:
-        emit({"status": "failed", **result, "reason": "pr_number_mismatch"}, 3)
-    if not state["head_branch_matches"]:
-        emit({"status": "failed", **result, "reason": "head_branch_mismatch", "expected_head_branch": branch}, 3)
-    expected_base = cfg["workspace"]["base_branch"]
-    if not state["base_branch_matches"]:
-        emit({"status": "failed", **result, "reason": "base_branch_mismatch", "expected_base_branch": expected_base}, 3)
-    expected_owner = info["nameWithOwner"].split("/", 1)[0]
-    head_repository = view.get("headRepository") or {}
-    head_owner = view.get("headRepositoryOwner") or {}
-    if head_repository.get("nameWithOwner") != info["nameWithOwner"] or head_owner.get("login") != expected_owner:
-        emit({"status": "failed", **result, "reason": "cross_repository"}, 3)
-    if view.get("state") != "OPEN":
-        emit({"status": "failed", **result, "reason": f"state:{view.get('state')}"}, 3)
-    if view.get("headRefOid") != local_head:
-        emit({"status": "failed", **result, "reason": "local_head_mismatch"}, 3)
+    reason = own_pull_request_mismatch(cfg, info, view, args.pr, branch, local_head)
+    if reason:
+        emit({"status": "failed", **result, "reason": reason}, 3)
     if not view.get("isDraft"):
         emit({"status": "ready", **result, "changed": False})
     proc = command(["gh", "pr", "ready", str(args.pr), "--repo", info["nameWithOwner"]], cwd=root)
     require_success(proc, "ready-for-review")
     emit({"status": "ready", **result, "changed": True})
+
+
+def do_update_branch(cfg, args):
+    """baseの現在の先端を、GitHub上で作業branchへmergeして取り込み、localを同じcommitへ進める。
+
+    履歴を書き換えないので他者のpushを上書きしない。公開済みのbaseを取り込むだけなのでgateは持たない。
+    """
+    root = bound_repo_root(cfg, args.repo)
+    permission(cfg, "push")
+    result = {"action": "update_branch", "pr": args.pr}
+    method = cfg["merge"]["method"]
+    if method not in {"squash", "merge"}:
+        # rebase / fast-forward ではbaseから取り込んだmerge commitがそのままbaseの履歴へ入る。
+        emit({"status": "forbidden", **result, "reason": "method_incompatible", "method": method}, 3)
+    info = repository_info(cfg, root)
+    branch = safe_current_branch(cfg, root)
+    if dirty_changes(root):
+        emit({"status": "failed", **result, "reason": "dirty_worktree"}, 3)
+    local_head = require_success(git(root, "rev-parse", "HEAD"), "head-sha", 2)
+    remote_ref = f"refs/heads/{branch}"
+    probe = git(root, "ls-remote", "--heads", info["pushUrl"], remote_ref)
+    if probe.returncode:
+        emit({"status": "failed", **result, "reason": "remote_ref_lookup_failed"}, 3)
+    remote_head = next((line.partition("\t")[0] for line in probe.stdout.splitlines()), None)
+    if remote_head != local_head:
+        emit({"status": "failed", **result, "reason": "remote_head_mismatch", "remote_sha": remote_head, "local_sha": local_head}, 3)
+    view = pull_request_state(cfg, root, info["nameWithOwner"], args.pr, branch)["view"]
+    reason = own_pull_request_mismatch(cfg, info, view, args.pr, branch, local_head)
+    if reason:
+        emit({"status": "failed", **result, "reason": reason}, 3)
+    base_tip = base_tip_sha(root, info["nameWithOwner"], view.get("baseRefName"))
+    if commits_behind(root, info["nameWithOwner"], base_tip, local_head) == 0:
+        emit({"status": "updated", **result, "branch": branch, "sha": local_head, "base_sha": base_tip, "changed": False})
+    if view.get("mergeable") == "CONFLICTING":
+        emit({"status": "conflicts", **result, "branch": branch, "sha": local_head, "base_sha": base_tip}, 3)
+    proc = command([
+        "gh", "api", "--method", "PUT", f"repos/{info['nameWithOwner']}/pulls/{args.pr}/update-branch",
+        "-f", f"expected_head_sha={local_head}",
+    ], cwd=root)
+    if proc.returncode:
+        emit({"status": "failed", **result, "reason": "update_branch_rejected", "stderr": proc.stderr[-4000:].strip()}, 3)
+    # GitHubはmergeを非同期に行う。remote branchが進んだことを期限付きで観測する。
+    updated = None
+    for attempt in range(10):
+        probe = git(root, "ls-remote", "--heads", info["pushUrl"], remote_ref)
+        observed = next((line.partition("\t")[0] for line in probe.stdout.splitlines()), None) if probe.returncode == 0 else None
+        if observed and observed != local_head:
+            updated = observed
+            break
+        if attempt < 9:
+            time.sleep(1)
+    if updated is None:
+        emit({"status": "failed", **result, "reason": "update_unconfirmed"}, 3)
+    require_success(git(root, "fetch", "--quiet", info["pushUrl"], f"{remote_ref}"), "fetch-updated-branch")
+    fetched = require_success(git(root, "rev-parse", "FETCH_HEAD"), "fetched-sha", 2)
+    if fetched != updated or git(root, "merge-base", "--is-ancestor", base_tip, fetched).returncode != 0:
+        emit({"status": "failed", **result, "reason": "updated_head_mismatch", "remote_sha": fetched}, 3)
+    require_success(git(root, "merge", "--ff-only", "--quiet", fetched), "fast-forward-local")
+    emit({"status": "updated", **result, "branch": branch, "sha": fetched, "base_sha": base_tip, "changed": True})
+
+
+def own_pull_request_mismatch(cfg, info, view, pr_number, branch, local_head):
+    """PRがこのrepositoryの作業branchから開いた、local HEADを指すOPENのPRでなければ理由を返す。"""
+    expected_owner = info["nameWithOwner"].split("/", 1)[0]
+    head_repository = view.get("headRepository") or {}
+    head_owner = view.get("headRepositoryOwner") or {}
+    if view.get("number") != pr_number:
+        return "pr_number_mismatch"
+    if view.get("headRefName") != branch:
+        return "head_branch_mismatch"
+    if view.get("baseRefName") != cfg["workspace"]["base_branch"]:
+        return "base_branch_mismatch"
+    if head_repository.get("nameWithOwner") != info["nameWithOwner"] or head_owner.get("login") != expected_owner:
+        return "cross_repository"
+    if view.get("state") != "OPEN":
+        return f"state:{view.get('state')}"
+    if view.get("headRefOid") != local_head:
+        return "local_head_mismatch"
+    return None
 
 
 def probe_remote_refs(root, push_url, refs):
@@ -1337,7 +1415,7 @@ def do_cleanup(cfg, args):
 def build_parser():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("preflight", "inspect", "plan", "start", "permission", "gate", "commit", "push", "pull-request", "ready-for-review", "merge-readiness", "merge", "cleanup"):
+    for name in ("preflight", "inspect", "plan", "start", "permission", "gate", "commit", "push", "update-branch", "pull-request", "ready-for-review", "merge-readiness", "merge", "cleanup"):
         item = sub.add_parser(name)
         item.add_argument("--config", required=True)
         if name not in {"permission", "gate"}:
@@ -1354,7 +1432,7 @@ def build_parser():
         if name == "pull-request":
             item.add_argument("--title", required=True)
             item.add_argument("--body-file", required=True)
-        if name in {"ready-for-review", "merge-readiness", "merge", "cleanup"}:
+        if name in {"update-branch", "ready-for-review", "merge-readiness", "merge", "cleanup"}:
             item.add_argument("--pr", required=True, type=int)
     return parser
 
@@ -1392,6 +1470,8 @@ def main():
         do_commit(cfg, args)
     if args.command == "push":
         do_push(cfg, args)
+    if args.command == "update-branch":
+        do_update_branch(cfg, args)
     if args.command == "pull-request":
         do_pull_request(cfg, args)
     if args.command == "ready-for-review":

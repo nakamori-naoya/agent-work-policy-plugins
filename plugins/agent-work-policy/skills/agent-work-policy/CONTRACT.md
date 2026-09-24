@@ -46,14 +46,18 @@ contract: agent-work-policy/agent-work-policy
 version: 1
 action: pull-request                 # 必須。§2.1 のいずれか1つ
 repo: /Users/me/src/acme             # 必須。対象repositoryの絶対path
-approved: false                      # 任意。既定 false
+approval:                            # 任意。gate のある action だけ。§2.2
+  actions: [pull-request]
+  branches: [agent/fix-order-cancel]
+  until: "2026-09-24T18:00:00+09:00"
+  quote: "取消の修正はPR作成まで進めていい"
 branch: agent/fix-order-cancel       # plan / start
 paths:                               # commit
   - src/order/cancel.py
 message: "取消の締切を出荷日基準へ揃える"     # commit
 title: "取消の締切を出荷日基準へ"             # pull-request
 body_file: /var/folders/x/body.md            # pull-request
-pr: 1234                                     # ready-for-review / merge-readiness / merge / cleanup
+pr: 1234                                     # update-branch / ready-for-review / merge-readiness / merge / cleanup
 ```
 
 | 名前 | 型 | 必須 | 対象 action |
@@ -62,17 +66,17 @@ pr: 1234                                     # ready-for-review / merge-readines
 | `version` | int | ○ | 全部。`1` 固定 |
 | `action` | string | ○ | 全部。宣言に無い値は`status: failed`、`reason: invalid_input` |
 | `repo` | 絶対 path | ○ | 全部 |
-| `approved` | bool | 任意 | gate のある action（`commit` / `push` / `pull-request` / `merge`） |
+| `approval` | object | 任意 | gate のある action（`commit` / `push` / `pull-request` / `merge`）。§2.2 |
 | `branch` | string | △ | `plan` / `start` |
 | `paths` | string[] | △ | `commit`。repository root からの相対 path |
 | `message` | string | △ | `commit` |
 | `title` | string | △ | `pull-request` |
 | `body_file` | 絶対 path | △ | `pull-request` |
-| `pr` | int | △ | `ready-for-review` / `merge-readiness` / `merge` / `cleanup` |
+| `pr` | int | △ | `update-branch` / `ready-for-review` / `merge-readiness` / `merge` / `cleanup` |
 
 **「対象 action」の列は、そのキーを書いてよい action の全部である。** 対象外の action へ渡した
 キーは未知のキーとして拒否する（`push` に `title` を添える、`commit` に `pr` を添える、など）。
-値の形は次を満たすこと。`version` は整数 `1`、`approved` は真偽値、`pr` は正の整数、
+値の形は次を満たすこと。`version` は整数 `1`、`approval` は §2.2 の形、`pr` は正の整数、
 `repo` は実在する directory の絶対 path、`body_file` は実在する regular file の絶対 path、
 `paths` は repository root からの相対 path の非空配列（各要素はLF・CR・Unicode行区切りを含む
 行境界と前後空白を含まず、
@@ -80,11 +84,10 @@ pr: 1234                                     # ready-for-review / merge-readines
 入口と内部処理の間で分割・trimしない。
 `branch` / `message` / `title` は空でない1行の文字列。
 
-`approved: true` は、**実際に人間の承認を得た再呼び出しにだけ**付ける。承認を得ていない呼び出しへ付けない。
 
 ### 2.1 action
 
-`plugin.json` の `metadata.harness.implements[].actions` が契約定義である。v1 の値は次の 10 個。
+`plugin.json` の `metadata.harness.implements[].actions` が契約定義である。v1 の値は次の 11 個。
 
 | action | 意味 | 追加入力 | human gate |
 |---|---|---|---|
@@ -93,9 +96,10 @@ pr: 1234                                     # ready-for-review / merge-readines
 | `start` | 設定に従って worktree または branch を作り、作業場所を返す | `branch` | 無し |
 | `commit` | 明示した path だけを、設定された検証を通してから commit する | `paths`、`message` | 有り |
 | `push` | 検査済みの単一 push URL へ作業 branch を送る | — | 有り |
+| `update-branch` | base の現在の先端を、GitHub 上で作業 branch へ merge して取り込み、local を同じ commit へ進める。履歴を書き換えない。既に含んでいれば何もしない | `pr` | 無し |
 | `pull-request` | base と draft 設定に従って PR を作る | `title`、`body_file` | 有り |
 | `ready-for-review` | 下書き PR をレビュー受付状態にする | `pr` | 無し |
-| `merge-readiness` | PR が merge 可能な機械状態かを判定する（変更しない） | `pr` | 無し |
+| `merge-readiness` | PR が merge 可能な機械状態かを判定する（変更しない）。head が base の現在の先端を含み、policy の必須 check がその head で成功していることを含む | `pr` | 無し |
 | `merge` | readiness 充足後に、設定された method で merge する | `pr` | 有り |
 | `cleanup` | merge 済み PR の remote branch と副 worktree を片付ける | `pr` | 無し |
 
@@ -104,6 +108,23 @@ pr: 1234                                     # ready-for-review / merge-readines
 **1 呼び出しにつき action は 1 つだけ**である。複数の操作をまとめて要求しない。消費側は必要な操作ごとに step を分ける。
 
 **この契約に検証（verify）の action は無い。** 変更内容の検証は依頼側の仕事であり、`commit` は自分の設定に書かれた検証を実行直前に自分で通す。
+
+### 2.2 承認範囲 `approval`
+
+人の承認は、**誰が、どの操作を、どの対象について、いつまで許したか**として渡す。1回だけの承認も同じ形で、範囲が1操作に縮むだけである。
+
+```yaml
+approval:
+  actions: [merge]                 # 必須。gate のある action の重複の無い非空配列
+  pull_requests: [24, 25]          # merge の対象。正の整数の配列
+  branches: [agent/fix-a]          # commit / push / pull-request の対象。作業 branch 名の配列
+  until: "2026-09-24T18:00:00+09:00"   # 必須。時差付きの ISO 8601 時刻。この時刻ちょうどからは範囲外
+  quote: "PR 24と25はマージしていいよ"   # 必須。利用者の発言の原文
+```
+
+`pull_requests` と `branches` の少なくとも一方を持つ。これ以外のキー、時差の無い時刻、`session` のような期限、空の原文は `invalid_input` になる。「危険でない限り」のような列挙できない範囲はこの形に入らない。消費側は列挙へ言い換えたものを利用者へ示し、同意を得てから渡す。
+
+provider は、今回の action が `actions` に含まれ、対象（`merge` なら `pr`、それ以外は現在の作業 branch）が列挙に含まれ、現在時刻が `until` より前であるときだけ gate を通す。範囲に入らなければ gate で止まり、`approval_target.outside_approval` に外れた要素（`action` / `pull_request` / `branch` / `until`）を返す。`approval` を組み立ててよいのは、利用者の発言を直接受け取った agent だけであり、別の agent へは object をそのまま渡す。
 
 ## 3. 出力
 
@@ -147,7 +168,7 @@ reason: ""                           # status: failed のときだけ非空
 `status: waiting_for_human` は失敗ではない。「permission は通ったが、人間の承認が要る」状態である。消費側は次を守る。
 
 1. `approval_target` を利用者へ提示して、承認を求める。
-2. 承認を**実際に得た**ときだけ、`approved: true` を付けて**同じ action を再度呼ぶ**。
+2. 承認を**実際に得た**ときだけ、その発言から作った `approval`（§2.2）を付けて**同じ action を再度呼ぶ**。
 3. 承認が得られなければ、その action を実行済みとして扱わない。
 
 `approval_target`は`gate`と、操作対象を識別できるaction固有値を持つ。たとえばcommitならbranch・paths・message・verification、pull-requestならrepository・branch・base・title、mergeならPR番号・URL・head SHA・baseを返す。固定した表示用文字列や内部file pathで対象を代理しない。
@@ -161,9 +182,10 @@ reason: ""                           # status: failed のときだけ非空
 | `start` | `{mode, branch, worktree}` |
 | `commit` | `{branch, sha, paths}` |
 | `push` | `{branch, sha, remote}` |
+| `update-branch` | `{pull_request, changed, sha}`。`changed` は base を取り込んだときだけ `true`、`sha` は取り込み後の head |
 | `pull-request` | `{pull_request, url, draft}` |
 | `ready-for-review` | `{pull_request, changed}` |
-| `merge-readiness` | `{pull_request, ready, unmet}` |
+| `merge-readiness` | `{pull_request, ready, unmet}`。`unmet` の例: `behind_base`（head が base の先端を含まない）、`checks`（必須 check が未成功）、`approvals`、`unresolved_threads` |
 | `merge` | `{pull_request, merged, method, sha}` |
 | `cleanup` | `{pull_request, branch_deleted, worktree_deleted}` |
 
@@ -189,9 +211,10 @@ reason: ""                           # status: failed のときだけ非空
 
 | `reason` | 意味 | 消費側の扱い |
 |---|---|---|
-| `permission_denied` | 操作そのものが許可されていない | 承認質問へ変えない。停止して報告する |
+| `permission_denied` | 操作そのものが許可されていない（`update-branch` では、policy の merge method が base からの merge commit と両立しない場合を含む） | 承認質問へ変えない。停止して報告する |
 | `not_ready` | merge readiness が未充足 | human gate を提示しない。状態が変わるまで待つ |
 | `verification_failed` | 設定された検証が失敗した | 成功として扱わない |
+| `conflicts` | `update-branch` で base と作業 branch が競合している | 競合を意味で解消してから、通常の commit と push で進める |
 | `no_changes` | 対象に変更が無い | commit 済みとして扱わない |
 | `invalid_input` | 入力が契約に合わない | 入力を直して呼び直す |
 | `policy_missing` | 対象repositoryにpolicy設定file（§5）が無い | 利用者がrepositoryへpolicy設定を置く。消費側は補わない |
@@ -209,12 +232,14 @@ reason: ""                           # status: failed のときだけ非空
 | AP1 | 設定は system・利用者・実行環境の権限を増やさない |
 | AP2 | 素の `git` / `gh` で内部制御を迂回しない |
 | AP3 | permission と human gate を action ごとに個別に適用する |
-| AP4 | `approved` が偽のまま gate 必須の action を実行せず、`waiting_for_human` と `approval_target` を返す |
+| AP4 | `approval` が今回の action・対象・時刻を含まない限り gate 必須の action を実行せず、`waiting_for_human` と `approval_target` を返す |
 | AP5 | 依頼範囲外の差分を自分の変更へ含めない |
 | AP6 | 失敗は停止する。部分的に実行して成功を報告しない |
 | AP7 | `workspace` を常に返し、消費側が提供側の設定を読まなくて済むようにする |
 | AP8 | 結果objectを直接返し、repository の policy 設定を読むだけで実行設定を作らない |
 | AP9 | 1 呼び出しで実行する action は 1 つだけである |
+| AP10 | head が base の現在の先端を含み、policy の必須 check がその head で成功していない PR を merge しない |
+| AP11 | 作業 branch の履歴を書き換えない。base への追従は `update-branch` の merge だけで行う |
 
 ## 5. 利用者設定 — 公開契約の一部
 
@@ -261,7 +286,7 @@ schema に無いキーと欠けたキーは受け付けない。v1 のキーは�
 | `merge.delete_branch` | bool | merge 後に remote branch を消すか |
 | `merge.delete_worktree` | bool | merge 後に副 worktree を消すか |
 | `merge.readiness.min_approvals` | int | merge gate を提示してよい最小承認数 |
-| `merge.readiness.require_checks_passed` | bool | required check の成功を要求するか |
+| `merge.readiness.required_checks` | `{name, app}[]` | merge に必要な check の唯一の定義。check 名と報告元 GitHub App の slug の組の、重複の無い非空配列 |
 | `merge.readiness.require_no_unresolved_threads` | bool | 未解決 thread が無いことを要求するか |
 
 **permission と gate は別物である。** `permissions.*` が false なら、その操作は承認を得ても実行しない

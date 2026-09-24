@@ -18,7 +18,7 @@
 
 - `git.remote`: push、remote branch確認、削除に使うremote名。
 - `permissions.commit`: commit操作そのものを許すか。
-- `permissions.push`: push操作そのものを許すか。
+- `permissions.push`: push操作そのものを許すか。`update-branch` も作業branchのremoteを進めるので同じpermissionを使う。
 - `permissions.pull_request`: PR作成そのものを許すか。`ready-for-review` も同じpermissionを使う。
 - `permissions.merge`: merge操作そのものを許すか。
 
@@ -31,7 +31,7 @@ permissionが `false` なら `permission_denied` で停止し、人間の承認�
 - `gates.before_pull_request`: PR作成直前に依頼者の明示承認を要求するか。
 - `gates.before_merge`: readiness充足後、merge直前に依頼者の明示承認を要求するか。
 
-gateが `true` なら承認対象を返して `waiting_for_human` で止まり、実際に承認を得た再実行だけへ `approved: true` を付ける。
+gateが `true` なら、呼び出しの `approval` が今回のaction・対象・時刻を含むときだけ通り、含まなければ承認対象を返して `waiting_for_human` で止まる。`update-branch` は公開済みのbaseを取り込むだけで新しい内容を公開しないので、gateを持たない。
 
 ## 検証とPR
 
@@ -40,15 +40,17 @@ gateが `true` なら承認対象を返して `waiting_for_human` で止まり�
 
 ## merge
 
-- `merge.method`: `squash` / `merge` / `rebase` はGitHub merge APIへ渡す。`fast-forward` はGraphQL `updateRefs` の `beforeOid` と `force:false` でbase更新とhead no-op CASをatomicに行い、GitHubのmerge反映後にheadを別CASで削除する。`fast-forward` では `delete_branch: true` が必須で、そうでなければschema検査で停止する。
+- `merge.method`: `squash` / `merge` / `rebase` はGitHub merge APIへ渡す。`update-branch` は `squash` と `merge` のときだけ使える（`rebase` と `fast-forward` では、baseから取り込んだmerge commitがbaseの履歴へ入るため）。`fast-forward` はGraphQL `updateRefs` の `beforeOid` と `force:false` でbase更新とhead no-op CASをatomicに行い、GitHubのmerge反映後にheadを別CASで削除する。`fast-forward` では `delete_branch: true` が必須で、そうでなければschema検査で停止する。
 - `merge.delete_branch`: merge成功後にremote作業branchを削除するか。worktree削除とは別である。
 - `merge.delete_worktree`: merge成功後にcleanな副worktreeを削除するか。`workspace.use_worktree: true` のときだけ `true` にでき、そうでなければschema検査で停止する。
 - `merge.readiness.min_approvals`: readyに必要な最新reviewのApprove数。`0` も有効である。
-- `merge.readiness.require_checks_passed`: `true` ならbase branch protectionのrequired checkを取得し、1件以上ある全checkの存在と成功をready条件にする。`checks[].app_id` が正の値ならhead commitのCheckRun名とGitHub App database IDの両方を照合する。`null` または `-1` は任意Appの同名CheckRunを許すが、legacy StatusContextでは満たせない。`checks` がなく `contexts` だけなら名前で照合する。取得不能・0件・欠落・100件超で完全取得できない場合はfail-closed。
+- `merge.readiness.required_checks`: mergeに必要なcheckの唯一の定義である。`{name: <check名>, app: <報告元GitHub Appのslug>}` の重複の無い非空配列で、各要素について、head commitでその名前とAppの組の最新のcheck runが完了して成功し、最後に取り直したPRのcheck rollupでも同じ名前が成功していることをready条件にする。名前だけで照合しないのは、別のAppやworkflowが同名のcheckを成功させられるからである。branch protectionの有無には依存しない。check suiteやcheck runを完全に取得できなければ止まる。
 - `merge.readiness.require_no_unresolved_threads`: `true` なら未解決review threadが0件であることをready条件にする。
 
 `merge.readiness.min_approvals` が `0` で、GitHubが `mergeStateStatus=BLOCKED` を返した場合、実行器は対象branchへ実際に適用されるRulesetを取得する。全ルールがPRルールであり、選択したmerge methodが許可され、review thread必須をpolicyでも検査し、現在利用者が全RulesetをPR経由でbypassできるとGitHubが返した場合だけ、承認不足による `BLOCKED` を許容する。required checkと未解決threadの失敗はbypassしない。
 
-`fast-forward` ではbranch protectionのrequired approvalsが `merge.readiness.min_approvals` 以上であり、conversation resolutionが要求時にserver側でも必須で、administratorにも保護が適用されることを確認する。policy判定より弱いserver protectionでは更新しない。
+readinessは、PRの `baseRefOid` ではなくbase branchのrefから現在の先端を取り直し、headがそれを含まなければ `behind_base` を未充足に加える。PRが返すbaseは古い値のことがあり、GitHubの `BEHIND` はbranch protectionで最新を必須にしたときしか返らないためである。
+
+`fast-forward` ではbranch protectionのrequired checkが `required_checks` の名前をすべて含み、required approvalsが `merge.readiness.min_approvals` 以上であり、conversation resolutionが要求時にserver側でも必須で、administratorにも保護が適用されることを確認する。policy判定より弱いserver protectionでは更新しない。
 
 設定値を報告用に列挙するだけで終わらせない。各値はworkspace作成、公開操作、停止、PR、mergeの該当箇所へ反映する。
