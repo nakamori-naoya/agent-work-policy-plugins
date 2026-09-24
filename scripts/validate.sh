@@ -461,12 +461,12 @@ assert module.map_completed_operation("update-branch", {"status": "updated", "pr
 # 承認範囲: 形の検査と、action・対象・期限の照合
 from datetime import datetime, timezone
 scope = {"actions": ["merge"], "pull_requests": [24, 25], "until": "2026-09-25T00:00:00+09:00", "quote": ["PR 24と25はマージしていいよ"]}
-assert module.approval_shape_problem(scope) is None
+assert control.approval_problem(scope, None) is None
 now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
-assert module.approval_mismatch(scope, "merge", 25, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == []  # 正例
-assert module.approval_mismatch(scope, "merge", 28, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == ["pull_request"]  # 反例: 範囲外のPR
-assert module.approval_mismatch(scope, "push", None, "agent/x", datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == ["action", "branch"]
-assert module.approval_mismatch(scope, "merge", 24, None, datetime(2026, 9, 24, 15, 0, tzinfo=timezone.utc)) == ["until"]  # 境界例: 期限ちょうどは範囲外
+assert control.approval_mismatch(scope, "merge", 25, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == []  # 正例
+assert control.approval_mismatch(scope, "merge", 28, None, datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == ["pull_request"]  # 反例: 範囲外のPR
+assert control.approval_mismatch(scope, "push", None, "agent/x", datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)) == ["action", "branch"]
+assert control.approval_mismatch(scope, "merge", 24, None, datetime(2026, 9, 24, 15, 0, tzinfo=timezone.utc)) == ["until"]  # 境界例: 期限ちょうどは範囲外
 for broken in (
     {**scope, "until": "2026-09-25T00:00:00"},  # 時差の無い時刻
     {**scope, "until": "session"},
@@ -478,21 +478,21 @@ for broken in (
     {k: v for k, v in scope.items() if k != "pull_requests"},  # 対象の列挙が無い
     {**scope, "scope": "危険でない限り"},  # 列挙できない範囲
 ):
-    assert module.approval_shape_problem(broken) is not None, broken
+    assert control.approval_problem(broken, None) is not None, broken
 
 # branchはprefix（末尾 /）でも指せる。policyの作業branchの外へは広げられない
 wide = {"actions": ["commit", "push", "pull-request"], "branches": ["agent/"], "until": "2026-09-25T00:00:00+09:00",
         "quote": ["今から行う作業においては危険なコマンドでない限り許可不要", "それでいい"]}
 at = datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc)
-assert module.approval_shape_problem(wide) is None
-assert module.approval_mismatch(wide, "push", None, "agent/fix-a", at) == []  # 正例: 事前に名前の分からないbranch
-assert module.approval_mismatch(wide, "push", None, "agentx/fix-a", at) == ["branch"]  # 反例: prefixの外
-assert module.approval_mismatch({**wide, "branches": ["agent/fix-a"]}, "push", None, "agent/fix-ab", at) == ["branch"]  # 境界例: 末尾 / の無い要素は完全一致
+assert control.approval_problem(wide, None) is None
+assert control.approval_mismatch(wide, "push", None, "agent/fix-a", at) == []  # 正例: 事前に名前の分からないbranch
+assert control.approval_mismatch(wide, "push", None, "agentx/fix-a", at) == ["branch"]  # 反例: prefixの外
+assert control.approval_mismatch({**wide, "branches": ["agent/fix-a"]}, "push", None, "agent/fix-ab", at) == ["branch"]  # 境界例: 末尾 / の無い要素は完全一致
 policy_cfg = {"workspace": {"branch_prefix": "agent/", "base_branch": "main"}}
-assert module.approval_policy_problem(wide, policy_cfg) is None
-assert module.approval_policy_problem({**wide, "branches": ["main"]}, policy_cfg) is not None  # 反例: base branch
-assert module.approval_policy_problem({**wide, "branches": ["a"]}, policy_cfg) is not None  # 反例: 作業branchのprefixを覆う
-assert module.approval_policy_problem({**wide, "branches": [""]}, policy_cfg) is not None
+assert control.approval_problem(wide, policy_cfg) is None
+assert control.approval_problem({**wide, "branches": ["main"]}, policy_cfg) is not None  # 反例: base branch
+assert control.approval_problem({**wide, "branches": ["a"]}, policy_cfg) is not None  # 反例: 作業branchのprefixを覆う
+assert control.approval_problem({**wide, "branches": [""]}, policy_cfg) is not None
 PY
 then
   pass "公開結果のaction別写像、型境界、内部JSON不正、policy schemaの正例・反例・境界例"

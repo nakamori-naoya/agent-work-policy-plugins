@@ -2,7 +2,7 @@
 # 全keyを書いて置く（同梱既定へのfallbackは無い。この例が既定値として読まれることもない）。
 # workspace: 作業場所とbranch規則。空のworktree_rootはOSの一時directoryを使う。
 # permissions: 操作を許すか。falseは人間の承認でも上書きできない。
-# gates: trueなら操作直前に依頼者の明示承認が要る。
+# gates: trueなら操作直前に承認範囲（approval）の照合が要る。before_push は push と update-branch の両方に効く。
 # verification: commit前に全て成功させるcommand。
 # merge.readiness: merge gateを提示してよい状態の機械条件。required_checksはmergeに必要なcheckの唯一の定義で、
 #   check名と報告元GitHub Appのslugの組を並べる（同名checkを別のAppやworkflowが成功させても通さないため）。

@@ -316,10 +316,12 @@ if [ "$exit_code" -eq 2 ] && jq -e '.error == "設定と対象repositoryが一�
 else
   ng "resolved config can be reused for another repository"
 fi
-expect_json 0 allowed python3 "$PLUGIN/scripts/control.py" permission --config "$CFG" --action pull_request
-expect_json 3 forbidden python3 "$PLUGIN/scripts/control.py" permission --config "$CFG" --action merge
-expect_json 3 waiting_for_human python3 "$PLUGIN/scripts/control.py" gate --config "$CFG" --action push
-expect_json 0 approved python3 "$PLUGIN/scripts/control.py" gate --config "$CFG" --action push --approved
+# 承認範囲は gate のある action すべてを、作業 branch の prefix と PR 1 について、遠い期限まで許す。
+APPROVAL='{"actions":["commit","push","update-branch","pull-request","merge"],"branches":["agent/"],"pull_requests":[1],"until":"2999-01-01T00:00:00+00:00","quote":["テストの範囲ではすべて進めてよい"]}'
+output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file /dev/null --message m --approval '{"actions":["commit"]}' 2>"$TMP/stderr")
+if [ "$?" -eq 2 ] && jq -e '.error=="承認範囲の形が不正"' <<<"$output" >/dev/null; then ok "malformed approval is rejected before any operation"; else ng "malformed approval: $output"; fi
+output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file /dev/null --message m --approval '{"actions":["commit"],"branches":["main"],"until":"2999-01-01T00:00:00+00:00","quote":["q"]}' 2>"$TMP/stderr")
+if [ "$?" -eq 2 ] && jq -e '.detail|test("work branch")' <<<"$output" >/dev/null; then ok "approval cannot reach the base branch"; else ng "approval reached base: $output"; fi
 
 echo "  Then commit前検証とhuman gateはagent-work-policyが返し、下流pluginはcommitしない"
 printf 'change\n' >> "$TMP/repository/tracked"
@@ -338,32 +340,32 @@ else
 fi
 printf 'outside\n' > "$TMP/repository/outside"
 git -C "$TMP/repository" add outside
-output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/paths.txt" --message fixture --approved 2>"$TMP/stderr")
+output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/paths.txt" --message fixture --approval "$APPROVAL" 2>"$TMP/stderr")
 if [ "$?" -eq 3 ] && jq -e '.reason=="pre_staged_paths_outside_scope" and (.paths | index("outside"))' <<<"$output" >/dev/null; then ok "pre-staged path outside scope is rejected"; else ng "pre-staged outside path was committed"; fi
 git -C "$TMP/repository" reset -q outside
 printf ':(glob)**\n' > "$TMP/magic-paths.txt"
 before_index=$(git -C "$TMP/repository" write-tree)
-output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/magic-paths.txt" --message fixture --approved 2>"$TMP/stderr")
+output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/magic-paths.txt" --message fixture --approval "$APPROVAL" 2>"$TMP/stderr")
 if [ "$?" -eq 2 ] && jq -e '.error=="repository外または.gitはcommit対象にできない"' <<<"$output" >/dev/null && [ "$(git -C "$TMP/repository" write-tree)" = "$before_index" ]; then ok "Git pathspec magic is rejected without changing index"; else ng "pathspec magic changed index"; fi
 printf './tracked\n' > "$TMP/dot-paths.txt"
 before_index=$(git -C "$TMP/repository" write-tree)
-output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/dot-paths.txt" --message fixture --approved 2>"$TMP/stderr")
+output=$(python3 "$PLUGIN/scripts/control.py" commit --config "$CFG" --repo "$TMP/repository" --paths-file "$TMP/dot-paths.txt" --message fixture --approval "$APPROVAL" 2>"$TMP/stderr")
 if [ "$?" -eq 2 ] && jq -e '.error=="repository外または.gitはcommit対象にできない"' <<<"$output" >/dev/null && [ "$(git -C "$TMP/repository" write-tree)" = "$before_index" ]; then ok "dot-relative path is rejected without changing index"; else ng "dot-relative path changed index"; fi
 
 echo "  And pushとPR作成はgate待ちの後、実行失敗をJSONで返す"
 expect_json 3 waiting_for_human env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository"
 git -C "$TMP/repository" remote set-url --add --push origin "$TMP/repository-origin.git"
 git -C "$TMP/repository" remote set-url --add --push origin "$TMP/repository-origin.git"
-output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved 2>"$TMP/stderr")
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approval "$APPROVAL" 2>"$TMP/stderr")
 if [ "$?" -eq 2 ] && jq -e '.error=="GitHub対象とgit remoteが一致しない"' <<<"$output" >/dev/null; then ok "multiple push URLs are rejected"; else ng "multiple push URLs were accepted"; fi
 git -C "$TMP/repository" config --unset-all remote.origin.pushurl
 git -C "$TMP/repository" remote set-url origin "$TMP/missing-push.git"
-expect_json 3 failed python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
+expect_json 3 failed python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approval "$APPROVAL"
 git -C "$TMP/repository" remote set-url origin "$TMP/repository-origin.git"
 git -C "$TMP/repository" commit -q --allow-empty -m additional
 local_sha=$(git -C "$TMP/repository" rev-parse HEAD)
-expect_json 0 pushed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
-expect_json 0 pushed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
+expect_json 0 pushed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approval "$APPROVAL"
+expect_json 0 pushed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approval "$APPROVAL"
 if [ "$(git --git-dir "$TMP/repository-origin.git" rev-parse refs/heads/agent/delegate)" = "$local_sha" ]; then ok "push sends the fixed local SHA and is idempotent"; else ng "push did not send the inspected SHA"; fi
 git clone -q "$TMP/repository-origin.git" "$TMP/remote-writer"
 git -C "$TMP/remote-writer" config user.email fixture@example.invalid
@@ -371,17 +373,17 @@ git -C "$TMP/remote-writer" config user.name fixture
 git -C "$TMP/remote-writer" switch -q agent/delegate
 git -C "$TMP/remote-writer" commit -q --allow-empty -m ahead
 git -C "$TMP/remote-writer" push -q origin HEAD:agent/delegate
-expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approval "$APPROVAL"
 git -C "$TMP/remote-writer" switch -q -C divergent origin/main
 git -C "$TMP/remote-writer" commit -q --allow-empty -m divergent
 git -C "$TMP/remote-writer" push -q --force origin HEAD:agent/delegate
-expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approved
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" push --config "$CFG" --repo "$TMP/repository" --approval "$APPROVAL"
 git --git-dir "$TMP/repository-origin.git" update-ref refs/heads/agent/delegate "$local_sha"
 printf 'fixture body\n' > "$TMP/body.md"
 expect_json 3 waiting_for_human env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md"
-expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approved
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=failed python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approval "$APPROVAL"
 git -C "$TMP/repository" commit -q --allow-empty -m unpublished
-expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approved
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approval "$APPROVAL"
 git -C "$TMP/repository" reset -q --soft HEAD^
 
 echo "  And ready-for-reviewはpull_request permissionと既存PR境界を再利用して冪等に公開する"
@@ -409,7 +411,7 @@ expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_STATE=CLOSED python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
 expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_DRAFT=true FAKE_PR_HEAD_OWNER=other FAKE_PR_HEAD_REPO=other/repository python3 "$PLUGIN/scripts/control.py" ready-for-review --config "$CFG" --repo "$TMP/repository" --pr 1
 : > "$TMP/gh.log"
-output=$(env PATH="$TMP/bin:$PATH" GH_REPO=attacker/other FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approved 2>"$TMP/stderr")
+output=$(env PATH="$TMP/bin:$PATH" GH_REPO=attacker/other FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" pull-request --config "$CFG" --repo "$TMP/repository" --title fixture --body-file "$TMP/body.md" --approval "$APPROVAL" 2>"$TMP/stderr")
 if [ "$?" -eq 0 ] && jq -e '.status=="created"' <<<"$output" >/dev/null && rg -q '^pr create --repo fixture/repository ' "$TMP/gh.log"; then ok "GH_REPO cannot redirect PR creation"; else ng "PR creation was not pinned to nameWithOwner"; fi
 cp "$FIXTURE" "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
 yq -i '.permissions.pull_request = false' "$TMP/repository/.harness-plugins/pull-request-disabled.yml"
@@ -449,7 +451,7 @@ if [ "$?" -eq 0 ] && jq -e '.status=="ready" and .ruleset_bypass.authorized==tru
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_PR_MERGE_STATE=BLOCKED FAKE_RULESET_BYPASS=never python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and .ruleset_bypass.authorized==false and (.reasons | index("merge_state:BLOCKED"))' <<<"$output" >/dev/null; then ok "non-bypass user remains review-blocked"; else ng "non-bypass user escaped review requirement: $output"; fi
 expect_json 3 waiting_for_human env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1
-expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 --approved
+expect_json 3 merge_failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready python3 "$PLUGIN/scripts/control.py" merge --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 --approval "$APPROVAL"
 : > "$TMP/gh.log"
 output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_PR_STATE=CLOSED python3 "$PLUGIN/scripts/control.py" merge-readiness --config "$CFG_MERGE" --repo "$TMP/merge-enabled" --pr 1 2>"$TMP/stderr")
 if [ "$?" -eq 3 ] && jq -e '.status=="not_ready" and (.reasons | index("state:CLOSED"))' <<<"$output" >/dev/null && ! rg -q 'updateRefs|push ' "$TMP/gh.log"; then ok "closed PR is rejected before mutation"; else ng "closed PR rejection reason"; fi
@@ -780,7 +782,7 @@ make_update_repo() {
 }
 make_update_repo update-branch-behind || exit 1
 before=$(git -C "$UB_REPO" rev-parse HEAD)
-output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 2>"$TMP/stderr")
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 --approval "$APPROVAL" 2>"$TMP/stderr")
 update_exit=$?
 after=$(git -C "$UB_REPO" rev-parse HEAD)
 remote_after=$(git --git-dir "$UB_REMOTE" rev-parse refs/heads/agent/delegate)
@@ -792,30 +794,37 @@ else
   ng "update-branch did not take in the base tip: $output $(cat "$TMP/stderr")"
 fi
 : > "$TMP/gh.log"
-output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 2>"$TMP/stderr")
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_LOG="$TMP/gh.log" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 --approval "$APPROVAL" 2>"$TMP/stderr")
 if [ "$?" -eq 0 ] && jq -e '.status=="updated" and .changed==false' <<<"$output" >/dev/null && ! rg -q 'update-branch' "$TMP/gh.log"; then ok "up-to-date branch is unchanged without calling the API"; else ng "update-branch idempotency: $output"; fi
 
+make_update_repo update-branch-gate || exit 1
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.status=="waiting_for_human" and .gate=="before_push"' <<<"$output" >/dev/null \
+  && [ "$(git --git-dir "$UB_REMOTE" rev-parse refs/heads/agent/delegate)" = "$(git -C "$UB_REPO" rev-parse HEAD)" ]; then ok "update-branch waits at the push gate without an approval"; else ng "update-branch gate: $output"; fi
+output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 --approval '{"actions":["push"],"branches":["agent/"],"until":"2999-01-01T00:00:00+00:00","quote":["pushはしてよい"]}' 2>"$TMP/stderr")
+if [ "$?" -eq 3 ] && jq -e '.outside_approval==["action"]' <<<"$output" >/dev/null; then ok "approval for push does not cover update-branch"; else ng "update-branch approval scope: $output"; fi
+
 make_update_repo update-branch-conflict || exit 1
-expect_json 3 conflicts env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" FAKE_PR_MERGEABLE=CONFLICTING python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1
+expect_json 3 conflicts env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" FAKE_PR_MERGEABLE=CONFLICTING python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 --approval "$APPROVAL"
 
 make_update_repo update-branch-dirty || exit 1
 printf 'dirty\n' >> "$UB_REPO/work.txt"
-expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 --approval "$APPROVAL"
 
 make_update_repo update-branch-unpushed || exit 1
 git -C "$UB_REPO" commit -q --allow-empty -m unpushed
-expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1
+expect_json 3 failed env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 --approval "$APPROVAL"
 
 for method in rebase fast-forward; do
   make_update_repo "update-branch-$method" || exit 1
   yq -i ".merge.method = \"$method\" | .merge.delete_branch = true" "$UB_CFG"
-  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 2>"$TMP/stderr")
-  if [ "$?" -eq 3 ] && jq -e '.status=="forbidden" and .reason=="method_incompatible"' <<<"$output" >/dev/null; then ok "$method policy refuses a merge commit from base"; else ng "$method policy allowed update-branch: $output"; fi
+  output=$(env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 --approval "$APPROVAL" 2>"$TMP/stderr")
+  if [ "$?" -eq 3 ] && jq -e '.status=="method_incompatible"' <<<"$output" >/dev/null; then ok "$method policy refuses a merge commit from base"; else ng "$method policy allowed update-branch: $output"; fi
 done
 
 make_update_repo update-branch-no-push || exit 1
 yq -i '.permissions.push = false' "$UB_CFG"
-expect_json 3 forbidden env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1
+expect_json 3 forbidden env PATH="$TMP/bin:$PATH" FAKE_GH_MODE=ready FAKE_REMOTE="$UB_REMOTE" python3 "$PLUGIN/scripts/control.py" update-branch --config "$UB_CFG" --repo "$UB_REPO" --pr 1 --approval "$APPROVAL"
 
 if [ "$FAIL" -eq 0 ]; then
   echo "Publication authority contract: passed"

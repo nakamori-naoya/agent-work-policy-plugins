@@ -26,10 +26,12 @@ repo: /Users/me/src/acme                      # 対象repositoryの絶対path
 title: "取消の締切を出荷日基準へ"
 body_file: /var/folders/x/body.md             # 実在するfileの絶対path
 approval:                                     # 任意。gateのあるactionだけ。§2.2
-  actions: [commit, push, pull-request]
+  actions: [commit, push, update-branch, pull-request]
   branches: [agent/]
   until: "2026-09-24T23:59:00+09:00"
-  quote: ["今日の作業は、危険なコマンドでない限り許可不要"]
+  quote:
+    - "今日の作業は、危険なコマンドでない限り許可不要"
+    - "commit、push、baseへの追従、PR作成を、agent/ のbranchで今日の23:59まで、で合っています"
 ```
 
 actionごとに使うキーは次のとおりである。`branch`、`message`、`title` は空でない1行の文字列、`pr` は正の整数である。`paths` はrepository rootからの相対pathの重複の無い非空配列で、各要素は行区切りと前後の空白と `..` を含まず、内部の空白はそのままpathの一部として扱う。
@@ -41,7 +43,7 @@ actionごとに使うキーは次のとおりである。`branch`、`message`、
 | `start` | policyに従ってworktreeまたはbranchを作る | `branch` | 無し |
 | `commit` | 明示したpathだけを、policyの検証を通してからcommitする | `paths`、`message` | 有り |
 | `push` | 作業branchを通常のpushで送る | — | 有り |
-| `update-branch` | baseの現在の先端を作業branchへmergeして取り込み、localを同じcommitへ進める。既に含んでいれば何もしない | `pr` | 無し |
+| `update-branch` | baseの現在の先端を作業branchへmergeして取り込み、localを同じcommitへ進める。既に含んでいれば何もしない | `pr` | 有り（pushと同じ） |
 | `pull-request` | policyのbaseと下書き設定でPRを作る | `title`、`body_file` | 有り |
 | `ready-for-review` | 下書きPRをレビュー受付の状態にする | `pr` | 無し |
 | `merge-readiness` | 変更せずに、PRがmergeしてよい状態かを返す | `pr` | 無し |
@@ -54,7 +56,7 @@ actionごとに使うキーは次のとおりである。`branch`、`message`、
 
 人の承認は、操作（`actions`）、対象、期限（`until`）、利用者の発言の原文（`quote`）を持つ範囲として渡す。1回だけの承認も同じ形で、範囲が1操作に縮むだけである。
 
-`actions` はgateのあるaction（`commit`、`push`、`pull-request`、`merge`）の重複の無い非空配列である。対象は、mergeならPR番号の配列 `pull_requests`、それ以外なら作業branchの配列 `branches` で、少なくとも一方を持つ。`branches` の要素は、末尾が `/` ならprefixとして、それ以外は名前の完全一致で照合する。prefixを使えば、これから作る名前の分からない作業branchをまとめて許せる。どの要素もpolicyの作業branchの接頭辞で始まらなければならず、base branchを指せない。`until` は時差付きのISO 8601時刻で、その時刻ちょうどからは範囲外である。
+`actions` はgateのあるaction（`commit`、`push`、`update-branch`、`pull-request`、`merge`）の重複の無い非空配列である。`update-branch` はpushと同じgateに従うが、承認の上では別の操作であり、`push` を許しても `update-branch` は許したことにならない。対象は、mergeならPR番号の配列 `pull_requests`、それ以外なら作業branchの配列 `branches` で、少なくとも一方を持つ。`branches` の要素は、末尾が `/` ならprefixとして、それ以外は名前の完全一致で照合する。prefixを使えば、これから作る名前の分からない作業branchをまとめて許せる。どの要素もpolicyの作業branchの接頭辞で始まらなければならず、base branchを指せない。`until` は時差付きのISO 8601時刻で、その時刻ちょうどからは範囲外である。
 
 `quote` には、範囲を与えた利用者の発言を原文のまま、発言の順に並べる。利用者の発言が「危険でない限り」のように列挙できない範囲なら、agentは操作・対象・期限へ言い換えたものを利用者に示し、同意を得てから `approval` にする。このときの `quote` は、範囲を与えた最初の発言と、言い換えへの同意の発言を順に並べたものである。後から照合する人は、この二つから範囲がどう導かれたかを再構成できる。
 
@@ -121,7 +123,8 @@ reason: ""
 
 | `reason` | 意味と消費側の扱い |
 |---|---|
-| `permission_denied` | 操作そのものがpolicyで許されていない（`update-branch` ではmerge方式と両立しない場合を含む）。承認を求めずに止まる |
+| `permission_denied` | 操作そのものがpolicyで許されていない。承認を求めずに止まる |
+| `method_incompatible` | policyのmerge方式が `update-branch` と両立しない（`rebase` と `fast-forward`）。方式を変えるかは利用者が決める |
 | `not_ready` | mergeを求めたがreadinessを満たさない。承認を求めず、状態が変わるまで待つ |
 | `verification_failed` | policyの検証が失敗した。成功として扱わない |
 | `no_changes` | 対象に変更が無い。commit済みとして扱わない |
@@ -135,7 +138,7 @@ reason: ""
 
 ## 4. 保証
 
-providerは次を保証する。policyはsystem、利用者、実行環境の権限を増やさない。素の `git` や `gh` で内部の制御を迂回しない。permissionとgateをactionごとに別々に当て、permissionの拒否を承認の質問へ変えない。`approval` が今回のaction・対象・時刻を含まない限り、gateのあるactionを実行せず、承認待ちと承認対象を返す。依頼の範囲外の差分を自分の変更へ含めない。失敗したら止まり、部分的に実行して成功を報告しない。`workspace` を毎回返す。1回の呼び出しで実行するactionは1つだけである。headがbaseの現在の先端を含み、policyの必須checkがそのheadで成功していないPRをmergeしない。作業branchの履歴を書き換えず、baseへの追従は `update-branch` のmergeだけで行う。
+providerは次を保証する。policyはsystem、利用者、実行環境の権限を増やさない。素の `git` や `gh` で内部の制御を迂回しない。permissionとgateをactionごとに別々に当て、permissionの拒否を承認の質問へ変えない。`approval` が今回のaction・対象・時刻を含まない限り、gateのあるactionを実行せず、承認待ちと承認対象を返す。依頼の範囲外の差分を自分の変更へ含めない。失敗したら止まり、部分的に実行して成功を報告しない。`workspace` を毎回返す。1回の呼び出しで実行するactionは1つだけである。headがbaseの現在の先端を含まないPR、またはpolicyの必須checkがそのheadで成功していないPRは、mergeしない。作業branchの履歴を書き換えず、baseへの追従は `update-branch` のmergeだけで行う。
 
 ## 5. 利用者設定
 
@@ -161,7 +164,7 @@ policy設定fileは利用者向けの公開契約である。何を許し、何�
 | `permissions.pull_request` | bool | PR作成と `ready-for-review` を許すか |
 | `permissions.merge` | bool | mergeと `cleanup` を許すか |
 | `gates.before_commit` | bool | commitの直前に人の承認を求めるか |
-| `gates.before_push` | bool | pushの直前に人の承認を求めるか |
+| `gates.before_push` | bool | pushと `update-branch` の直前に人の承認を求めるか |
 | `gates.before_pull_request` | bool | PR作成の直前に人の承認を求めるか |
 | `gates.before_merge` | bool | mergeの直前に人の承認を求めるか |
 | `verification.commands` | string[] | commitの直前にすべて成功させる検証command |
