@@ -1,101 +1,51 @@
 # 公開操作の停止契約
 
-このreferenceは、`control.py`がcommit、push、PR作成、mergeを実行してよい条件と返り値を定める。
+この資料は、各操作がいつ実行され、いつ止まるかを定める。GitHubとの競合状態をどう閉じるかという実装の説明は、`scripts/control.py` の冒頭のコメントにある。
 
-## 3つの条件
+## 判定の順序
 
-| 条件 | 意味 | 上書き |
-|---|---|---|
-| permission | 操作そのものが許されているか | できない |
-| human gate | 操作直前に依頼者の明示承認が必要か | 呼び出しの`approval`が今回のaction・対象・時刻を含むときだけ、`invoke.py`が`--approved`を付けて通す |
-| merge readiness | PRがmerge可能な機械状態か。headがbaseの現在の先端を含み、policyの必須checkがそのheadで成功していること | 状態が変わるまで通らない |
+操作の前に、permission、merge readiness（mergeだけ）、human gateの順に確かめる。permissionが拒否なら、承認を求めずに止まる。readinessが未充足の間は、mergeの承認を求めない。GitHub reviewのApproveはreadinessの材料であり、human gateの承認ではない。gateは、呼び出しの承認範囲 `approval` が今回のaction・対象・時刻を含むときだけ通る。
 
-順番は`permission → readiness（mergeだけ）→ gate → 操作`である。`ready-for-review`だけは、既存PRのレビュー受付状態を変える`pull_request` permission内の遷移であり、新しい公開先やmergeを生まないため、追加のhuman gateを持たない。PR作成時にgateで公開意図を確認済みという説明は、そのPRがこのpolicy経由かつ`before_pull_request: true`で作成された場合にしか成り立たないため、gate非適用の根拠にしない。permission拒否を承認質問へ変えない。
-readiness未充足の間はmerge承認を求めない。GitHub reviewのApproveはreadinessの材料であり、human gateの承認ではない。
+## いつ操作し、いつ止まるか
 
-## 操作ごとの入力
+### commit
 
-- commit: 明示したpath、message、検証結果を使う。事前stageを含めpath外がindexにあれば停止し、明示pathだけをcommitする。
-- update-branch: PR番号を使う。`push` permissionを判定し、`merge.method`が`squash`か`merge`でなければ`forbidden`で止まる。working treeがclean、local HEADとremote作業branchとPR headが一致し、PRがこのrepositoryの作業branchから開いたOPENのPRであることを確かめる。baseの現在の先端をrefから取り、headがそれを含めば外部変更なしで成功する。PRが競合していれば`conflicts`で止まる。そうでなければGitHubの「Update a pull request branch」APIへ`expected_head_sha`（local HEAD）を渡してbaseをmergeさせ、remote作業branchが進んだことを期限付きで観測し、fetchした新しいheadがbaseの先端を含むことを確かめてからlocalをfast-forwardする。gateは持たない。公開済みのbaseを取り込むだけで、新しい内容を公開しないからである。force pushもrebaseも使わない。
-- push: 実行時にGitHub repository identityとfetch/push URLを照合し、単一の検査済みpush URLへ固定HEAD SHAを完全な作業branch refspecで送る。remote branchは不存在、同一SHA、またはlocal HEADの祖先だけを許し、進行済み・分岐・祖先判定不能なら停止する。通常のnon-force pushなので、検査後にremoteが進行した場合も上流を上書きしない。検査済みURLを直接使い`-u`を付けないため、local branchのupstream trackingは変更しない。force pushとbase branch pushを提供しない。
-- pull-request: title、body file、作業branch、base branch、draft設定を使う。remote headがlocal HEADと一致してから、固定repositoryへ作成する。
-- ready-for-review: 内部レビュー完了後かつmerge readinessの前に必要なときだけ、既存PRの下書きを公開する。新しい公開先やmergeを生まないレビュー受付状態の遷移として、`pull_request` permissionだけを再利用し追加gateを持たない。既に公開済みなら外部変更なしで成功する。
-- merge: PR番号、head SHA、readinessがbase branchのrefから取り直したbaseの先端SHA、methodを使う。PRはOPENかつ同一repositoryのheadに限定し、更新直前にもchecksを含む状態を再取得する。`fast-forward`ではGitHub GraphQL `updateRefs`へbaseの`beforeOid=base SHA, afterOid=head SHA`とheadの`beforeOid=head SHA, afterOid=head SHA`（no-op CAS）を`force:false`で渡し、baseとheadの競合検査を原子的に行う。通常のpushやforce-with-leaseは使わない。更新後はremote baseとGitHub上のindirect merge反映を確認し、反映後だけ別のCAS mutationでheadを削除する。同一mutationでheadまで削除するとGitHubがPRを`MERGED`ではなく`CLOSED`にし得るため、反映確認前には削除しない。
+明示したpathだけを、policyの検証commandを全件通してからcommitする。明示したpathの外が既にindexにあれば、stageする前に止まる。対象に変更が無ければ `no_changes` で止まる。
 
-このCAS設計は、複数refを単一mutationで原子的に更新し、各refへ更新前後のOIDを指定できるGitHub公式の[GraphQL `updateRefs`](https://docs.github.com/en/graphql/reference/git#updaterefs)契約に基づく。
+### push
 
-fast-forward直前の2回目readinessでは、最初のPR snapshotを取得した後にbranch protection、baseの先端とcompare、check run、review threadを取得し、最後にPRをもう一度取得する。最後のsnapshotでstate、draft、mergeable、merge state、head/base、review、check rollupを再評価し、最初のsnapshotからhead/baseが変わっていないことも要求する。repository identityはそのreadinessより前に確定し、すべての`gh pr`操作は確定した`nameWithOwner`へ固定する。最後のPR応答から`updateRefs`まで追加のnetwork照会を挟まない。base/head SHAのraceは`beforeOid`で閉じる。required checkの名前、approval、conversation resolutionはpolicy要求以上のbranch protectionがserver側にも存在しadministratorへ適用されることを確認し、更新時のserver判定へ委ねる。PR state、draft、mergeable、merge stateには`updateRefs`の原子条件がないため、最後のreadiness応答後にも不可避のraceが残る。これらは窓を最小化しても完全には閉じられず、更新後のPR反映検査と`merge_partial`で検出する。
+作業branchのHEADを、GitHubのrepositoryと一致を確かめた単一のpush URLへ、通常のpushで送る。remoteの作業branchが無いか、同じcommitか、local HEADの祖先のときだけ送り、進んでいるか分岐していれば止まる。force pushとbase branchへのpushは提供しない。
 
-GitHub merge APIを使う方式では、必要承認数0のpolicyに対して`mergeStateStatus=BLOCKED`が返ると、最初と最後のPR snapshotの間で対象branchへ適用中のRulesetと現在利用者のbypass可否を取得する。適用ルールがPRルールだけで、merge method、thread検査、全Rulesetの現在利用者bypassを証明できた場合に限り、承認不足の`BLOCKED`を許容する。required checkと未解決threadは別条件のまま残る。PR state、draft、mergeable、head/baseにはmerge API直前にも不可避のraceがあるため、head SHAをmerge APIへ渡しserver側の原子判定へ委ねる。
+### update-branch
 
-GitHub repository identityとgit remoteのfallback照合は、GitHub API URLのhostと`nameWithOwner`へ一致する完全なrepository URLだけを許す。HTTPS、`ssh://git@host/owner/repo.git`、`git@host:owner/repo.git`を対象とし、余分なpath、明示port、query、fragment、credential、不正なSCP username、host内に見せかけた文字列を拒否する。不正URLの原文はerrorへ含めず固定文へredactする。API URL由来のhostを使うためGitHub Enterprise Serverにも同じ境界を適用する。
+baseの現在の先端を、GitHub上で作業branchへmergeして取り込み、localを同じcommitへ進める。working treeがclean、local HEADとremoteの作業branchとPRのheadが一致し、PRがこのrepositoryの作業branchから開いたOPENのPRであるときだけ動く。headが既に先端を含んでいれば、何も変えずに成功する。PRが競合していれば `conflicts` で止まる。merge方式が `rebase` か `fast-forward` なら、permission拒否として止まる。履歴を書き換えないので、他者のpushを上書きしない。
 
-remote branchの削除は冪等である。merge時点ですでに対象refが存在しなければ削除済みとして成功する。
-remote refの照会自体が通信・認証・権限などで失敗した場合は、削除済みと推測せずcleanup失敗を返す。
-削除対象が存在する場合はremote headがPR head SHAと一致するときだけ、`updateRefs`の`beforeOid`付き削除を行う。partial success後は`cleanup --pr`で同じCAS cleanupだけを再開できる。
-branch cleanupに失敗した場合は、cleanup再開に必要な作業場所を保持するためworktreeを削除しない。
+### pull-request
 
-GraphQLを含むGitHub JSON応答はtop-level `errors`が1件でもあれば失敗とする。`updateRefs`の通信・応答異常時はremote base/headを照合し、両refが更新前のままと確認できた場合だけ`merge_failed`、base更新または照合不能なら再実行を促さない`merge_partial`を返す。
+remoteの作業branchがlocal HEADと一致してから、policyのbaseと下書き設定でPRを作る。
 
-merge readinessは、最初のPR snapshotの後にbase branchのrefから現在の先端を取り、compare APIでheadが含まないbase側のcommit数を数える。0でなければ`behind_base`を未充足に加える。PRの`baseRefOid`は古い値を返すことがあり、GitHubの`BEHIND`はbranch protectionで最新を必須にしたときしか返らないので、どちらも判定に使わない。GitHub merge APIを使う方式では、readinessの後にbaseが進んだ場合の競合が残る。merge APIはhead SHAの照合しか持たず、baseの照合を持たないためである。
+### ready-for-review
 
-scriptが`waiting_for_human`を返した場合だけ、対象を提示して承認を求める。`approval`が今回の実行を含まない呼出しへ
-`--approved`を付けない。`forbidden`、`not_ready`、`verification_failed`を成功として扱わない。
+内部レビューが終わった下書きPRを、レビュー受付の状態にする。既に公開済みなら何も変えずに成功する。新しい公開先もmergeも生まないので、`pull_request` のpermissionだけを使い、gateを持たない。
 
-## `control.py`の呼び出し契約
+### merge-readiness
 
-このpackageが公開Git操作の唯一の所有者である。`control.py`を呼ぶのは同じ入口の`scripts/invoke.py`だけであり、外部pluginはこのpackageの公開playbookを通してしか操作を要求できない。permission、human gate、検証、readiness、`git` / `gh`の公開操作をこのpackageの外で再実装しない。
+変更せずに、PRがmergeしてよい状態かを返す。headがbaseの現在の先端を含むこと、policyの必須checkがそのheadで成功していること、承認数と未解決threadの条件、PRがOPENで下書きでなくmerge可能であることを確かめる。満たさない条件は名前で返る（`behind_base`、`checks_failed`、`checks_pending`、`checks_missing`、`approvals`、`unresolved_threads` など）。否定的な結果も照会としては成功である。
 
-### 入力
+### merge
 
-1. `--config`へ、対象repository rootの`.harness-plugins/agent-work-policy.config.yml`の絶対pathを渡す。`control.py`はkey集合と型をschemaと完全一致で検査し、fileが無い・schemaに合わない場合はexit `2`で停止する。
-2. `--repo`が必要なcommandには公開対象repositoryを渡す。`--config`のfileは`--repo`のrepository rootに置かれたものでなければならず、別repositoryの設定は`設定と対象repositoryが一致しない`としてexit `2`で拒否する。`permission`と`gate`は`--repo`を取らない。
-3. actionは`commit`、`push`、`pull_request`、`merge`だけである。`ready-for-review`は`pull_request`、`update-branch`は`push`のpermissionを再利用する。各公開commandの追加入力は以下のとおり。
+readinessを取り直し、満たしていればgateを確かめてから、policyのmerge方式でmergeする。readinessの後でheadやbaseが変わっていれば、変更せずに `merge_failed` で止まる。baseを更新したのにPRへの反映を確認できなければ `merge_partial` を返し、mergeを再実行させない。merge後の片付け（remoteの作業branchと副worktreeの削除）だけが失敗したら、merge済みであることと残ったものを `cleanup_failed` で返す。merge APIを使う方式では、readinessの後にbaseが進む競合が残る。merge APIがheadの照合しか持たず、baseの照合を持たないためである。
 
-| command | 追加入力 | 実行前にagent-work-policyが行うこと |
-|---|---|---|
-| `commit` | `--repo`、`--paths-file`、`--message` | permissionを判定し、pathを限定して設定済み検証を実行してからgateを判定する |
-| `push` | `--repo` | permissionを判定し、branchとHEAD SHAを取得してからgateを判定する |
-| `update-branch` | `--repo`、`--pr` | `push` permissionとmerge methodを判定し、作業branch・PR・baseの先端を照合してから取り込む |
-| `pull-request` | `--repo`、`--title`、`--body-file` | permissionを判定し、branch、base、draftを決めてからgateを判定する |
-| `ready-for-review` | `--repo`、`--pr` | `pull_request` permissionを判定し、PR番号・現在branchとhead branch・設定baseとbase branchを照合する。draftなら`gh pr ready`を実行し、既にreadyなら外部変更しない |
-| `merge-readiness` | `--repo`、`--pr` | baseの先端とcompare、check run、thread（fast-forwardではprotectionも）を取得した後にPRを最終再取得し、最初のsnapshotとのhead/base一致を含めて再評価する |
-| `merge` | `--repo`、`--pr` | permissionを判定し、readinessを再取得してからgateを判定し、設定されたmethodでmergeする |
-| `cleanup` | `--repo`、`--pr` | merge済みPRと同一repository headを確認し、CAS branch cleanupを再開する |
+### cleanup
 
-### 結果
+merge済みのPRについて、remoteの作業branchと副worktreeを片付ける。remoteのbranchがPRのheadと一致するときだけ消し、既に無ければ成功とする。変更の残る副worktreeは消さない。
 
-`argparse`がcommandと必須引数を受理した呼出しでは、stdoutはJSON objectである。`argparse`による入力不備はusageをstderrへ出してexit `2`で終わるため、stdout JSONの保証外である。呼び出し元skillはJSONが返った場合に最低限`status`を読み、成功時だけ後続工程へ進む。成功JSONは`status`に`allowed`、`approved`、`ready`、`committed`、`pushed`、`updated`、`created`、`merged`、`cleaned`のいずれかを持つ。`update-branch`の`updated`には`changed`があり、baseを取り込んだときだけ`true`である。`ready-for-review`の`ready`には`changed`があり、下書きを解除したときだけ`true`である。
+## control.pyの呼び出し
 
-| exit | 意味 | 呼び出し元skillの扱い |
-|---:|---|---|
-| 0 | 判定または操作が成功した | stdout JSONの`status`を記録し、成功した判定または操作だけを後続へ渡す |
-| 2 | 引数、設定、repository、依存commandが不正 | 公開操作を行わず停止する |
-| 3 | permission拒否、承認待ち、readiness不足、検証失敗、競合、操作失敗 | `forbidden`、`waiting_for_human`、`not_ready`、`verification_failed`、`conflicts`、`failed`、`merge_failed`、`merged_cleanup_failed`、`no_changes`などを成功へ変換せず停止・報告する |
-| 4 | base更新後にPR反映を確認できないpartial success | `merge_partial`、`base_updated:true`、実際のbase SHAを返す。mergeを再実行せず状態確認後に`cleanup`だけを再開する |
+公開Git操作の持ち主はこのpackageだけであり、`control.py` を呼ぶのは同じ入口の `scripts/invoke.py` だけである。外部pluginは公開playbookを通してしか操作を要求できない。
 
-`waiting_for_human`だけは承認待ちを示すJSONである。`--approved`を付けるのは、公開入力の`approval`を照合した`invoke.py`だけである。`merge-readiness`が`not_ready`の間は、呼び出し元skillもhuman gateを提示しない。
-実行していない操作、取得できなかったPR状態、失敗したbranch・worktree削除を成功として報告しない。merge後の片付けだけが失敗した場合は`merged_cleanup_failed`として、merge済みであることと残った対象を同時に返す。
-policy設定fileの置かれたrepository rootと`--repo`のcanonical pathは全repository操作で一致必須である。GitHub対象repository、設定remote、PR head repositoryも一致しなければ公開操作を行わない。
+`invoke.py` は、`--config` に対象repository rootのpolicy設定fileの絶対path、`--repo` に対象repository、actionごとに `--branch`、`--paths-file` と `--message`、`--title` と `--body-file`、`--pr` を渡す。承認範囲が今回の実行を含むときだけ `--approved` を付ける。policy設定fileは `--repo` のrepository rootにあるものでなければならず、別repositoryの設定は拒否される。
 
-### 呼び出し元へ返す語彙
+`control.py` は標準出力へJSON objectを1つ返す。成功の `status` は `inspected`、`ready`、`created`、`committed`、`pushed`、`updated`、`merged`、`cleaned` のどれかで、`update-branch` と `ready-for-review` の結果は外部を変えたかを `changed` で示す。終了codeは、0が成功、2が引数・設定・repositoryの不備（操作前に停止）、3がpermission拒否・承認待ち・readiness未充足・検証失敗・競合・操作失敗、4がbase更新後にPR反映を確認できない `merge_partial` である。
 
-`control.py`のJSONと`exit`は**このpackageの内部表現**である。`scripts/invoke.py`が公開結果へ写すときは次に従う。内部の`status`名と`exit`をそのまま外へ出さない。
-
-| control.pyの結果 | 公開status | 公開gate_state | 公開reason |
-|---|---|---|---|
-| exit 0（`allowed` / `approved` / `ready` / `committed` / `pushed` / `updated` / `created` / `merged` / `cleaned`） | `completed` | `allowed` | — |
-| `waiting_for_human` | `waiting_for_human` | `waiting_for_human` | — |
-| `forbidden`（permissionが false、または`update-branch`とmerge methodが両立しない） | `failed` | `denied` | `permission_denied` |
-| `not_ready`（`merge-readiness`の問い合わせ） | `completed` | `allowed` | — |
-| `not_ready`（`merge`の実行要求） | `failed` | `allowed` | `not_ready` |
-| `verification_failed` | `failed` | `allowed` | `verification_failed` |
-| `conflicts`（`update-branch`） | `failed` | `allowed` | `conflicts` |
-| `no_changes` / `no_staged_changes` | `failed` | `allowed` | `no_changes` |
-| `merge_partial` | `failed` | `allowed` | `merge_partial` |
-| `merge_failed` | `failed` | `allowed` | `merge_failed` |
-| `merged_cleanup_failed` | `failed` | `allowed` | `cleanup_failed` |
-| exit 2（引数・設定・repositoryが不正。`{error: ...}`の診断JSON） | `failed` | `denied` | `error`（診断を`detail`へ添える） |
-| 上記以外の`failed` | `failed` | `allowed` | `error` |
-
-承認待ちのときは、`context`（branch、paths、検証結果、readiness）を承認対象として返す。全文はfileへ書き、その絶対pathを添える。
+`invoke.py` はこの内部の結果を公開の語彙へ写し、内部の `status` 名と終了codeをそのまま外へ出さない。成功は `completed`、承認待ちは `waiting_for_human`、それ以外は `failed` になる。`forbidden` は `permission_denied`、`not_ready` は `not_ready`（merge-readinessの照会では `completed`）、`verification_failed`、`no_changes`、`conflicts`、`merge_partial`、`merge_failed` はそれぞれ同名、`merged_cleanup_failed` は `cleanup_failed`、それ以外の失敗と操作前の不備は `error` になる。公開の語彙に写らない内部の理由は `detail` に添える。

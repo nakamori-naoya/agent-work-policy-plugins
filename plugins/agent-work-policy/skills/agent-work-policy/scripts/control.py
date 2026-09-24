@@ -1,4 +1,36 @@
 #!/usr/bin/env python3
+"""agent-work-policy の公開Git操作を、policyに従って1つ実行する内部tool。呼ぶのは同じ入口の invoke.py だけである。
+
+いつ操作し、いつ止まるかは references/operation-contract.md が定める。ここには、GitHubとの競合状態をどう閉じるかを書く。
+
+readinessの二つのsnapshot
+  readinessは最初にPRを取得し、次にbaseの先端（refから取り直す）とcompare、必須checkのcheck run、review thread、
+  fast-forwardならbranch protectionを取得し、最後にPRをもう一度取得する。最後のsnapshotでstate、draft、mergeable、
+  merge state、head/base、review、check rollupを再評価し、最初のsnapshotからhead/baseが変わっていないことも求める。
+  repository identityはreadinessより前に確定し、すべての `gh pr` 操作は確定した nameWithOwner へ固定する。
+
+fast-forward
+  GitHub GraphQL `updateRefs` へ、baseの beforeOid=base先端・afterOid=head と、headの beforeOid=afterOid=head（no-opのCAS）を
+  force:false で渡し、baseとheadの競合検査を原子的に行う。最後のPR応答から updateRefs まで追加のnetwork照会を挟まない。
+  PR state、draft、mergeable、merge stateには原子条件が無いので、更新後のPR反映検査と merge_partial で検出する。
+  反映を確かめる前にheadを消すとGitHubがPRを MERGED ではなく CLOSED にし得るので、headは反映確認の後に別のCASで消す。
+  updateRefs の応答異常では remote の base/head を照合し、両方が更新前のままなら merge_failed、そうでなければ merge_partial。
+
+merge API（squash / merge / rebase）
+  head SHAをmerge APIへ渡し、server側の原子判定へ委ねる。merge APIはbaseの照合を持たないので、readinessの後にbaseが
+  進む競合は残る。承認数0のpolicyで BLOCKED が返ったときは、実際に当たるRulesetをすべて現在の利用者がPR経由でbypass
+  できるとGitHubが返した場合に限り、承認不足の BLOCKED を許す。
+
+update-branch
+  GitHubの「Update a pull request branch」APIへ expected_head_sha を渡す。GitHubはmergeを非同期に行うので、remoteの
+  作業branchが進んだことを期限付きで観測し、fetchした新しいheadがbaseの先端を含むことを確かめてからlocalをfast-forwardする。
+
+remote URL
+  GitHub repository identityとgit remoteの照合は、GitHub API URLのhostと nameWithOwner に一致する完全なURLだけを許す。
+  余分なpath、明示port、query、fragment、credential、不正なSCP usernameは拒否し、不正URLの原文はerrorへ含めない。
+
+GitHubのJSON応答はtop-levelの errors が1件でもあれば失敗とする。
+"""
 import argparse
 import json
 import os
@@ -613,17 +645,23 @@ query($owner:String!,$name:String!,$oid:GitObjectID!){
     return runs
 
 
-def checks_passed(rollup, check_runs, required_checks):
-    """policyが宣言した各check（名前と報告元Appの組）の最新のrunが、head commitで完了し成功していること。
+def check_state(rollup, check_runs, required_checks):
+    """policyが宣言した必須checkの状態を、成功・失敗・実行中・未報告の一つへまとめる。
 
-    名前だけでは別のAppやworkflowが同名のcheckを成功させられるので、報告元のApp slugまで照合する。
-    最後に取り直したPRのcheck rollupでも同じ名前が成功していることを要求し、取得の間の変化を拾う。
+    各必須check（名前と報告元Appの組）について、head commitの最新のcheck runを見る。名前だけでは別のAppや
+    workflowが同名のcheckを成功させられるので、報告元のApp slugまで照合する。成功と数えるのは、最新のrunが
+    完了して成功し、最後に取り直したPRのcheck rollupでも同じ名前が成功しているときだけである。
+    一件でも完了して失敗していれば failed、失敗は無いが完了していないものがあれば pending、
+    その名前とAppの組のrunが一件も無ければ missing を返す。
     """
-    rollup_success = {
-        item.get("name") or item.get("context")
-        for item in rollup or []
-        if str(item.get("conclusion") or item.get("state") or "").upper() == "SUCCESS"
-    }
+    rollup_success, rollup_failed = set(), set()
+    for item in rollup or []:
+        name = item.get("name") or item.get("context")
+        result = str(item.get("conclusion") or item.get("state") or "").upper()
+        if result == "SUCCESS":
+            rollup_success.add(name)
+        elif str(item.get("status") or "COMPLETED").upper() == "COMPLETED" and result not in {"", "PENDING", "EXPECTED"}:
+            rollup_failed.add(name)
     latest = {}
     for run in check_runs or []:
         key = (run.get("name"), run.get("app"))
@@ -632,14 +670,25 @@ def checks_passed(rollup, check_runs, required_checks):
         order = run.get("completedAt") or run.get("startedAt") or ""
         if key not in latest or order >= latest[key][0]:
             latest[key] = (order, run)
+    states = set()
     for required in required_checks:
         found = latest.get((required["name"], required["app"]))
-        if found is None or required["name"] not in rollup_success:
-            return False
+        if found is None:
+            states.add("missing")
+            continue
         run = found[1]
-        if str(run.get("status") or "").upper() != "COMPLETED" or str(run.get("conclusion") or "").upper() != "SUCCESS":
-            return False
-    return True
+        if str(run.get("status") or "").upper() != "COMPLETED":
+            states.add("pending")
+        elif str(run.get("conclusion") or "").upper() != "SUCCESS":
+            states.add("failed")
+        elif required["name"] in rollup_failed:
+            states.add("failed")
+        elif required["name"] not in rollup_success:
+            states.add("pending")
+    for state in ("failed", "missing", "pending"):
+        if state in states:
+            return state
+    return "passed"
 
 
 def base_tip_sha(root, repo_name, base):
@@ -815,9 +864,9 @@ def merge_readiness(cfg, root, pr_number, info=None):
         reasons.append("cross_repository")
     if approvals < required["min_approvals"]:
         reasons.append("approvals")
-    passed = checks_passed(view.get("statusCheckRollup"), check_runs, required["required_checks"])
-    if not passed:
-        reasons.append("checks")
+    checks = check_state(view.get("statusCheckRollup"), check_runs, required["required_checks"])
+    if checks != "passed":
+        reasons.append(f"checks_{checks}")
     protected_reviews = protection.get("required_pull_request_reviews") or {}
     protected_approvals = protected_reviews.get("required_approving_review_count") or 0
     if fast_forward:
@@ -843,7 +892,7 @@ def merge_readiness(cfg, root, pr_number, info=None):
         "behind_base": behind,
         "approvals": approvals,
         "required_approvals": required["min_approvals"],
-        "checks_passed": passed,
+        "checks": checks,
         "required_checks": required["required_checks"],
         "unresolved_threads": unresolved,
         "ruleset_bypass": ruleset_bypass,

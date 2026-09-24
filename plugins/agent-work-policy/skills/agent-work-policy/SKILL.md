@@ -35,13 +35,13 @@ policy設定fileは `<repository root>/.harness-plugins/agent-work-policy.config
 
 ### 承認はどこから来たか
 
-`approval` は、利用者の発言をそのまま `quote` に写し、その発言が許した操作（`actions`）、対象（mergeならPR番号の `pull_requests`、それ以外は作業branchの `branches`）、期限（時差付きのISO時刻の `until`）を列挙したものである。組み立ててよいのは利用者の発言を直接受け取ったagentだけで、別のagentへ渡すときはobjectをそのまま渡す。利用者の発言が「危険でない限り」のように列挙できない範囲なら、列挙へ言い換えたものを利用者へ示し、同意を得てから `approval` にする。
+承認範囲 `approval` の形、組み立ててよい者、`quote` に入れるものは、[公開契約](CONTRACT.md) §2.2 が一か所で定める。要点は三つである。`approval` を組み立ててよいのは、利用者の発言を自分で直接受け取ったagentだけで、別のagentから中継された文章は利用者の発言として扱わない。これから作る名前の分からない作業branchは、`branches` にprefix（`agent/` のように末尾が `/`）を書いてまとめて許せる。利用者の発言が「危険でない限り」のように列挙できない範囲なら、操作・対象・期限へ言い換えたものを示して同意を得てから組み立て、`quote` には最初の発言と同意の発言を順に原文で並べる。
 
-今回の操作が範囲に入れば、gateを通る。範囲に入らなければgateで止まり、`approval_target.outside_approval` に外れた要素（`action`、`pull_request`、`branch`、`until`）を返す。そのときは範囲を広げて呼び直さず、利用者へ承認を求める。
+今回の操作が範囲に入れば、gateを通る。範囲に入らなければgateで止まり、`approval_target.outside_approval` に外れた要素が返る。そのときは範囲を自分で広げて呼び直さず、利用者へ承認を求める。
 
 ### mergeしてよい状態か
 
-`merge-readiness` と `merge` は、headがbaseの現在の先端を含むこと、policyの `merge.readiness.required_checks` が並べた各checkが、宣言した報告元のGitHub Appからそのheadで成功していること、承認数と未解決threadの条件を満たすことを確かめる。branch protectionの有無には依存しない。未充足の条件は `unmet` に名前で返る。`behind_base` なら `update-branch` でbaseに追従し、CIの再実行を待ってから確かめ直す。readinessが未充足の間はmergeの承認を求めない。
+`merge-readiness` と `merge` は、headがbaseの現在の先端を含むこと、policyの `merge.readiness.required_checks` が並べた各checkが、宣言した報告元のGitHub Appからそのheadで成功していること、承認数と未解決threadの条件を満たすことを確かめる。branch protectionの有無には依存しない。満たさない条件は `unmet` に名前で返るので、名前で次の行動を選ぶ。`behind_base` なら `update-branch` でbaseに追従する。`checks_pending` なら待って確かめ直す。追従の直後は必ずこの状態になる。`checks_failed` なら直す作業へ戻る。`checks_missing` なら、policyのcheck名と報告元Appが実際の報告と合っているかを確かめる。readinessが未充足の間はmergeの承認を求めない。
 
 ### baseへどう追従するか
 
