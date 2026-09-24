@@ -41,7 +41,7 @@ policy設定fileは `<repository root>/.harness-plugins/agent-work-policy.config
 
 ### mergeしてよい状態か
 
-`merge-readiness` と `merge` は、headがbaseの現在の先端を含むこと、policyの `merge.readiness.required_checks` が並べた各checkが、宣言した報告元のGitHub Appからそのheadで成功していること、承認数と未解決threadの条件を満たすことを確かめる。branch protectionの有無には依存しない。満たさない条件は `unmet` に名前で返るので、名前で次の行動を選ぶ。`behind_base` なら `update-branch` でbaseに追従する。`checks_pending` なら待って確かめ直す。追従の直後は必ずこの状態になる。`checks_failed` なら直す作業へ戻る。`checks_missing` なら、policyのcheck名と報告元Appが実際の報告と合っているかを確かめる。readinessが未充足の間はmergeの承認を求めない。
+`merge-readiness` と `merge` は、headがbaseの現在の先端を含むこと、policyの `merge.readiness.required_checks` が並べた各checkが、宣言した報告元のGitHub Appからそのheadで成功していること、承認数と未解決threadの条件を満たすことを確かめる。branch protectionの有無には依存しない。満たさない条件は `unmet` に名前で返るので、名前で次の行動を選ぶ。`behind_base` なら `update-branch` でbaseに追従する。`checks_pending` なら待って確かめ直す。必須checkが実行中のときだけでなく、pushや追従の直後でcheckがまだ作られていないときもこの状態になる。`checks_failed` なら直す作業へ戻る。`checks_missing` は、head commitのcheck suiteがすべて完了したのに必須checkが報告されなかったときだけ返るので、待っても変わらない。policyのcheck名と報告元Appが実際の報告と合っているかを確かめる。readinessが未充足の間はmergeの承認を求めない。
 
 ### baseへどう追従するか
 
