@@ -45,7 +45,7 @@ policy設定fileは `<repository root>/.harness-plugins/agent-work-policy.config
 
 ### baseへどう追従するか
 
-作業branchをbaseへ追従させるのは `update-branch` だけである。GitHub上でbaseの先端を作業branchへmergeし、localを同じcommitへ進める。履歴を書き換えないので、他者のpushを上書きしない。rebaseやforce pushで追従しない。競合があれば `conflicts` で止まるので、競合を意味で解消する入口へ渡す。policyの `merge.method` が `rebase` か `fast-forward` なら、baseから取り込んだmerge commitがそのままbaseの履歴に入るので拒否される。
+作業branchをbaseへ追従させるのは `update-branch` だけである。GitHub上でbaseの先端を作業branchへmergeし、localを同じcommitへ進める。履歴を書き換えないので、他者のpushを上書きしない。rebaseやforce pushで追従しない。remoteの作業branchを進めるので、pushと同じpermissionとgateに従う。競合があれば `conflicts` で止まるので、競合を意味で解消する入口へ渡す。取り込んだmerge commitは、squashでmergeすればbaseに入らない。policyの `merge.method` が `rebase` か `fast-forward` なら、そのmerge commitがbaseの履歴に入るので `method_incompatible` で止まる。方式を変えるかは利用者が決める。
 
 ### 並行作業の資源は分かれているか
 

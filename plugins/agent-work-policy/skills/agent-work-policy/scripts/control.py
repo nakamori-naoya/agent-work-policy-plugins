@@ -41,11 +41,20 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from urllib.parse import unquote, urlparse
 
 
 ACTIONS = ("commit", "push", "pull_request", "merge")
-GATES = {action: f"before_{action}" for action in ACTIONS}
+# gateのある公開action。update-branch は作業branchのremoteを進めるので、pushと同じgateに従う。
+GATES = {
+    "commit": "before_commit",
+    "push": "before_push",
+    "update-branch": "before_push",
+    "pull-request": "before_pull_request",
+    "merge": "before_merge",
+}
+APPROVAL_KEYS = {"actions", "pull_requests", "branches", "until", "quote"}
 
 
 def emit(payload, code=0):
@@ -301,19 +310,81 @@ def permission(cfg, action):
         emit({"status": "forbidden", "action": action, "allowed": False}, 3)
 
 
-def gate(cfg, action, approved, context=None):
+def parse_until(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def approval_problem(approval, cfg):
+    """承認範囲の形と、policyの作業branchの外へ広がっていないかを検査する。問題が無ければ None。
+
+    形と組み立ててよい者は CONTRACT.md §2.2 が定める。列挙できない範囲（「危険でない限り」など）はこの形に入らない。
+    """
+    if not isinstance(approval, dict) or not set(approval) <= APPROVAL_KEYS:
+        return "must be an object with actions, pull_requests or branches, until, quote"
+    actions = approval.get("actions")
+    if not isinstance(actions, list) or not actions or any(item not in GATES for item in actions) or len(actions) != len(set(actions)):
+        return "actions must be unique gated actions"
+    if "pull_requests" not in approval and "branches" not in approval:
+        return "must enumerate pull_requests or branches"
+    prs = approval.get("pull_requests", [])
+    if not isinstance(prs, list) or any(type(item) is not int or item <= 0 for item in prs):
+        return "pull_requests must be positive integers"
+    branches = approval.get("branches", [])
+    if not isinstance(branches, list) or any(not isinstance(item, str) or not item.strip() for item in branches):
+        return "branches must be non-empty strings"
+    if parse_until(approval.get("until")) is None:
+        return "until must be an ISO 8601 time with a UTC offset"
+    quote = approval.get("quote")
+    if not isinstance(quote, list) or not quote or any(not isinstance(item, str) or not item.strip() for item in quote):
+        return "quote must list the user's own words verbatim"
+    if cfg is not None:
+        prefix, base = cfg["workspace"]["branch_prefix"], cfg["workspace"]["base_branch"]
+        for entry in branches:
+            if entry == base or not entry.startswith(prefix):
+                return f"branches entry {entry!r} must be a work branch or prefix under {prefix!r}"
+    return None
+
+
+def branch_in_scope(branch, entries):
+    """末尾が / の要素はprefixとして、それ以外は名前の完全一致で照合する。"""
+    return branch is not None and any(
+        branch.startswith(entry) if entry.endswith("/") else branch == entry for entry in entries
+    )
+
+
+def approval_mismatch(approval, action, pr, branch, now):
+    """今回の実行が承認範囲に入らない要素を返す。空なら範囲内。mergeの対象はPR、それ以外は作業branch。"""
+    outside = []
+    if action not in approval["actions"]:
+        outside.append("action")
+    if action == "merge":
+        if pr not in approval.get("pull_requests", []):
+            outside.append("pull_request")
+    elif not branch_in_scope(branch, approval.get("branches", [])):
+        outside.append("branch")
+    if not now < parse_until(approval["until"]):
+        outside.append("until")
+    return outside
+
+
+def gate(cfg, action, approval, context, pr=None, branch=None):
+    """gateが要るactionは、承認範囲が今回のaction・対象・時刻を含むときだけ通す。"""
     key = GATES[action]
-    required = cfg["gates"][key]
-    if required and not approved:
-        payload = {
-            "status": "waiting_for_human",
-            "action": action,
-            "gate": key,
-            "required": True,
-        }
-        if context:
-            payload["context"] = context
-        emit(payload, 3)
+    if not cfg["gates"][key]:
+        return
+    outside = None if approval is None else approval_mismatch(approval, action, pr, branch, datetime.now(timezone.utc))
+    if outside == []:
+        return
+    payload = {"status": "waiting_for_human", "action": action, "gate": key, "context": context}
+    if outside:
+        payload["outside_approval"] = outside
+    emit(payload, 3)
 
 
 def base_exists(cfg, root):
@@ -993,7 +1064,7 @@ def do_commit(cfg, args):
     if not changes.stdout.strip():
         emit({"status": "no_changes", "action": "commit", "paths": paths}, 3)
     verification = run_verification(cfg, root)
-    gate(cfg, "commit", args.approved, {"branch": branch, "paths": paths, "verification": verification})
+    gate(cfg, "commit", args.approval, {"branch": branch, "paths": paths, "verification": verification}, branch=branch)
     require_success(git(root, "--literal-pathspecs", "add", "--", *paths), "stage")
     staged = require_success(git(root, "diff", "--cached", "--name-only", "-z"), "inspect-staged-paths", 2)
     staged_paths = [item for item in staged.split("\0") if item]
@@ -1032,7 +1103,7 @@ def do_push(cfg, args):
         "branch": branch,
         "sha": sha,
     }
-    gate(cfg, "push", args.approved, context)
+    gate(cfg, "push", args.approval, context, branch=branch)
     require_success(git(root, "push", info["pushUrl"], f"{sha}:{remote_ref}"), "push")
     emit({"status": "pushed", "action": "push", **context, "remote": info["remote"]})
 
@@ -1050,14 +1121,14 @@ def do_pull_request(cfg, args):
     remote_sha = next((line.partition("\t")[0] for line in probe.stdout.splitlines()), None)
     if remote_sha != sha:
         emit({"status": "failed", "action": "pull_request", "reason": "remote_head_mismatch", "remote_sha": remote_sha, "local_sha": sha}, 3)
-    gate(cfg, "pull_request", args.approved, {
+    gate(cfg, "pull-request", args.approval, {
         "repository": info["nameWithOwner"],
         "url": redacted_remote_url(info["pushUrl"]),
         "branch": branch,
         "sha": sha,
         "base": cfg["workspace"]["base_branch"],
         "title": args.title,
-    })
+    }, branch=branch)
     cmd = [
         "pr", "create", "--repo", info["nameWithOwner"],
         "--base", cfg["workspace"]["base_branch"], "--head", branch,
@@ -1114,7 +1185,7 @@ def do_update_branch(cfg, args):
     method = cfg["merge"]["method"]
     if method not in {"squash", "merge"}:
         # rebase / fast-forward ではbaseから取り込んだmerge commitがそのままbaseの履歴へ入る。
-        emit({"status": "forbidden", **result, "reason": "method_incompatible", "method": method}, 3)
+        emit({"status": "method_incompatible", **result, "method": method}, 3)
     info = repository_info(cfg, root)
     branch = safe_current_branch(cfg, root)
     if dirty_changes(root):
@@ -1136,6 +1207,7 @@ def do_update_branch(cfg, args):
         emit({"status": "updated", **result, "branch": branch, "sha": local_head, "base_sha": base_tip, "changed": False})
     if view.get("mergeable") == "CONFLICTING":
         emit({"status": "conflicts", **result, "branch": branch, "sha": local_head, "base_sha": base_tip}, 3)
+    gate(cfg, "update-branch", args.approval, {"branch": branch, "sha": local_head, "base_sha": base_tip, "pr": args.pr}, branch=branch)
     proc = command([
         "gh", "api", "--method", "PUT", f"repos/{info['nameWithOwner']}/pulls/{args.pr}/update-branch",
         "-f", f"expected_head_sha={local_head}",
@@ -1396,7 +1468,7 @@ def do_merge(cfg, args):
     ready = merge_readiness(cfg, root, args.pr, info)
     if ready["status"] != "ready":
         emit(ready, 3)
-    gate(cfg, "merge", args.approved, ready)
+    gate(cfg, "merge", args.approval, ready, pr=args.pr)
     if cfg["merge"]["method"] == "fast-forward":
         merge_sha = fast_forward_merge(cfg, root, info, ready, branch)
     else:
@@ -1467,17 +1539,14 @@ def do_cleanup(cfg, args):
 def build_parser():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("preflight", "inspect", "plan", "start", "permission", "gate", "commit", "push", "update-branch", "pull-request", "ready-for-review", "merge-readiness", "merge", "cleanup"):
+    for name in ("preflight", "inspect", "plan", "start", "commit", "push", "update-branch", "pull-request", "ready-for-review", "merge-readiness", "merge", "cleanup"):
         item = sub.add_parser(name)
         item.add_argument("--config", required=True)
-        if name not in {"permission", "gate"}:
-            item.add_argument("--repo", required=True)
+        item.add_argument("--repo", required=True)
         if name in {"plan", "start"}:
             item.add_argument("--branch", required=True)
-        if name in {"permission", "gate"}:
-            item.add_argument("--action", required=True, choices=ACTIONS)
-        if name in {"gate", "commit", "push", "pull-request", "merge"}:
-            item.add_argument("--approved", action="store_true")
+        if name in GATES:
+            item.add_argument("--approval", help="承認範囲のJSON（CONTRACT.md §2.2）")
         if name == "commit":
             item.add_argument("--paths-file", required=True)
             item.add_argument("--message", required=True)
@@ -1492,6 +1561,16 @@ def build_parser():
 def main():
     args = build_parser().parse_args()
     cfg = load_config(args.config)
+    if getattr(args, "approval", None) is not None:
+        try:
+            args.approval = json.loads(args.approval)
+        except json.JSONDecodeError as exc:
+            emit({"error": "承認範囲がJSONではない", "detail": str(exc)}, 2)
+        problem = approval_problem(args.approval, cfg)
+        if problem:
+            emit({"error": "承認範囲の形が不正", "detail": problem}, 2)
+    elif args.command in GATES:
+        args.approval = None
     if args.command == "preflight":
         root = bound_repo_root(cfg, args.repo)
         dirty = dirty_changes(root)
@@ -1511,13 +1590,6 @@ def main():
         emit(workspace_plan(cfg, args.repo, args.branch))
     if args.command == "start":
         emit(start_workspace(cfg, args.repo, args.branch))
-    if args.command == "permission":
-        permission(cfg, args.action)
-        emit({"status": "allowed", "action": args.action, "allowed": True})
-    if args.command == "gate":
-        permission(cfg, args.action)
-        gate(cfg, args.action, args.approved)
-        emit({"status": "approved", "action": args.action, "required": cfg["gates"][GATES[args.action]]})
     if args.command == "commit":
         do_commit(cfg, args)
     if args.command == "push":

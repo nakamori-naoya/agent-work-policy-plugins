@@ -3,7 +3,7 @@
   "plugin": "agent-work-policy",
   "version": "5.0.0",
   "created_at": "2026-09-24T13:48:15.426024+00:00",
-  "notes": "merge readinessに「headがbaseの現在の先端を含む」（behind_base）を加えた。必須checkをpolicyの merge.readiness.required_checks（check名と報告元App slugの組）で唯一に定義し、branch protectionに依存しない。baseへの追従手段 update-branch を追加。承認を範囲object approval（actions・対象・期限・原文）で受ける。並行作業でGit以外の実行資源を分ける判断を reference に置いた。 承認範囲の branches は末尾 / のprefixを許し、quote は利用者の発言の原文の配列にした。必須checkの未充足は checks_pending / checks_failed / checks_missing に分けた。",
+  "notes": "merge readinessに「headがbaseの現在の先端を含む」（behind_base）を加えた。必須checkをpolicyの merge.readiness.required_checks（check名と報告元App slugの組）で唯一に定義し、branch protectionに依存しない。baseへの追従手段 update-branch を追加。承認を範囲object approval（actions・対象・期限・原文）で受ける。並行作業でGit以外の実行資源を分ける判断を reference に置いた。 承認範囲の branches は末尾 / のprefixを許し、quote は利用者の発言の原文の配列にした。必須checkの未充足は checks_pending / checks_failed / checks_missing に分けた。 update-branch は push と同じ permission と gate に従う。承認の照合は gate を持つ control.py の一か所で行い、真偽値の承認を内部でも運ばない。merge 方式と両立しない update-branch は method_incompatible を返す。",
   "breaking": "policyの merge.readiness.require_checks_passed を廃止し merge.readiness.required_checks を必須にした。公開入力の approved: bool を廃止し approval object に置き換えた。 merge-readiness の unmet の checks を checks_pending / checks_failed / checks_missing に分けた。",
   "migration": "各repositoryの .harness-plugins/agent-work-policy.config.yml で require_checks_passed を削り、required_checks に {name, app} を並べる。呼び出し側は approved: true の代わりに利用者の発言から approval を組み立てて渡す。",
   "checks": {

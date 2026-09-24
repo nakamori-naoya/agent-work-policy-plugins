@@ -18,7 +18,7 @@
 
 ### update-branch
 
-baseの現在の先端を、GitHub上で作業branchへmergeして取り込み、localを同じcommitへ進める。working treeがclean、local HEADとremoteの作業branchとPRのheadが一致し、PRがこのrepositoryの作業branchから開いたOPENのPRであるときだけ動く。headが既に先端を含んでいれば、何も変えずに成功する。PRが競合していれば `conflicts` で止まる。merge方式が `rebase` か `fast-forward` なら、permission拒否として止まる。履歴を書き換えないので、他者のpushを上書きしない。
+baseの現在の先端を、GitHub上で作業branchへmergeして取り込み、localを同じcommitへ進める。working treeがclean、local HEADとremoteの作業branchとPRのheadが一致し、PRがこのrepositoryの作業branchから開いたOPENのPRであるときだけ動く。headが既に先端を含んでいれば、何も変えずに成功する。PRが競合していれば `conflicts` で止まる。merge方式が `rebase` か `fast-forward` なら `method_incompatible` で止まる。pushと同じpermissionとgateに従う。履歴を書き換えないので、他者のpushを上書きしない。
 
 ### pull-request
 
@@ -44,8 +44,8 @@ merge済みのPRについて、remoteの作業branchと副worktreeを片付け�
 
 公開Git操作の持ち主はこのpackageだけであり、`control.py` を呼ぶのは同じ入口の `scripts/invoke.py` だけである。外部pluginは公開playbookを通してしか操作を要求できない。
 
-`invoke.py` は、`--config` に対象repository rootのpolicy設定fileの絶対path、`--repo` に対象repository、actionごとに `--branch`、`--paths-file` と `--message`、`--title` と `--body-file`、`--pr` を渡す。承認範囲が今回の実行を含むときだけ `--approved` を付ける。policy設定fileは `--repo` のrepository rootにあるものでなければならず、別repositoryの設定は拒否される。
+`invoke.py` は、`--config` に対象repository rootのpolicy設定fileの絶対path、`--repo` に対象repository、actionごとに `--branch`、`--paths-file` と `--message`、`--title` と `--body-file`、`--pr` を渡す。承認範囲は、形を検査したうえで `--approval` にJSONのまま渡す。範囲の照合はgateを持つ `control.py` が一か所で行い、真偽値の承認は運ばない。policy設定fileは `--repo` のrepository rootにあるものでなければならず、別repositoryの設定は拒否される。
 
 `control.py` は標準出力へJSON objectを1つ返す。成功の `status` は `inspected`、`ready`、`created`、`committed`、`pushed`、`updated`、`merged`、`cleaned` のどれかで、`update-branch` と `ready-for-review` の結果は外部を変えたかを `changed` で示す。終了codeは、0が成功、2が引数・設定・repositoryの不備（操作前に停止）、3がpermission拒否・承認待ち・readiness未充足・検証失敗・競合・操作失敗、4がbase更新後にPR反映を確認できない `merge_partial` である。
 
-`invoke.py` はこの内部の結果を公開の語彙へ写し、内部の `status` 名と終了codeをそのまま外へ出さない。成功は `completed`、承認待ちは `waiting_for_human`、それ以外は `failed` になる。`forbidden` は `permission_denied`、`not_ready` は `not_ready`（merge-readinessの照会では `completed`）、`verification_failed`、`no_changes`、`conflicts`、`merge_partial`、`merge_failed` はそれぞれ同名、`merged_cleanup_failed` は `cleanup_failed`、それ以外の失敗と操作前の不備は `error` になる。公開の語彙に写らない内部の理由は `detail` に添える。
+`invoke.py` はこの内部の結果を公開の語彙へ写し、内部の `status` 名と終了codeをそのまま外へ出さない。成功は `completed`、承認待ちは `waiting_for_human`、それ以外は `failed` になる。`forbidden` は `permission_denied`、`not_ready` は `not_ready`（merge-readinessの照会では `completed`）、`verification_failed`、`no_changes`、`conflicts`、`method_incompatible`、`merge_partial`、`merge_failed` はそれぞれ同名、`merged_cleanup_failed` は `cleanup_failed`、それ以外の失敗と操作前の不備は `error` になる。公開の語彙に写らない内部の理由は `detail` に添える。
