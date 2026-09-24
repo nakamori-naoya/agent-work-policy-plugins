@@ -1,9 +1,9 @@
 # agent-work-policy — Git作業の1操作を、repositoryが所有するpolicyのpermissionとhuman gateに従って実行する。
-# 公開する入力・出力・保証は CONTRACT.md が正式な定義。工程順はこのYAMLの宣言を正式な定義とするで、同じagentが辿る。
+# 公開する入力・出力・保証は CONTRACT.md が正式な定義。工程順はこのYAMLの宣言を正式な定義とし、同じagentが辿る。
 version: 2
 name: agent-work-policy
 description: Git作業の1操作を、permissionとhuman gateに従って実行する
-inputs: [contract, version, action, repo, approved, branch, paths, message, title, body_file, pr]
+inputs: [contract, version, action, repo, approval, branch, paths, message, title, body_file, pr]
 requires: []
 
 # 機械可読な公開契約の宣言。manifest の metadata.harness.implements[].actions と同じ集合を持つ。
@@ -14,7 +14,7 @@ contract:
     input: object
     output: object
     entry: scripts/invoke.py
-  actions: [inspect, plan, start, commit, push, pull-request, ready-for-review, merge-readiness, merge, cleanup]
+  actions: [inspect, plan, start, commit, push, update-branch, pull-request, ready-for-review, merge-readiness, merge, cleanup]
   gate_states: [allowed, waiting_for_human, denied]
   statuses: [completed, waiting_for_human, failed]
 
@@ -22,7 +22,7 @@ steps:
   - id: build-input
     agent_work: invoking_agent
     purpose: 契約入力をそのまま使うか、自然言語の依頼から1 actionの入力objectを組み立てる
-    needs: [contract, version, action, repo, approved, branch, paths, message, title, body_file, pr]
+    needs: [contract, version, action, repo, approval, branch, paths, message, title, body_file, pr]
     provides: [request]
 
   - id: config

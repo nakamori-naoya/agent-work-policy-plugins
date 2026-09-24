@@ -7,6 +7,9 @@
 policy: 対象repository root の .harness-plugins/agent-work-policy.config.yml（1層・必須・fallback無し）。
 出力: CONTRACT.md §3 のJSON objectを標準出力へ1行で返す。
 exit: 0 = completed、2 = 入力不備または policy 不備（Git操作前に停止）、3 = 承認待ち・拒否・操作失敗。
+
+承認は `approval` object（actions・対象・期限・利用者の原文）で受け、今回のactionと対象と時刻が範囲に入るときだけ
+gateを通す。範囲に入らなければgateで止まり、外れた要素を approval_target に添える。
 """
 
 from __future__ import annotations
@@ -18,12 +21,13 @@ import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 
 CONTRACT = "agent-work-policy/agent-work-policy"
 ACTIONS = {
     "inspect": (), "plan": ("branch",), "start": ("branch",),
-    "commit": ("paths", "message"), "push": (),
+    "commit": ("paths", "message"), "push": (), "update-branch": ("pr",),
     "pull-request": ("title", "body_file"),
     "ready-for-review": ("pr",), "merge-readiness": ("pr",),
     "merge": ("pr",), "cleanup": ("pr",),
@@ -32,11 +36,12 @@ GATED = {"commit", "push", "pull-request", "merge"}
 POLICY_FILE = Path(".harness-plugins/agent-work-policy.config.yml")
 PUBLIC_REASONS = {
     "permission_denied", "not_ready", "verification_failed", "no_changes",
-    "invalid_input", "policy_missing", "merge_partial", "merge_failed", "cleanup_failed", "error",
+    "invalid_input", "policy_missing", "merge_partial", "merge_failed", "cleanup_failed", "conflicts", "error",
 }
+APPROVAL_KEYS = {"actions", "pull_requests", "branches", "until", "quote"}
 SUCCESS_STATUSES = {
     "inspect": {"inspected"}, "plan": {"ready"}, "start": {"created"},
-    "commit": {"committed"}, "push": {"pushed"}, "pull-request": {"created"},
+    "commit": {"committed"}, "push": {"pushed"}, "update-branch": {"updated"}, "pull-request": {"created"},
     "ready-for-review": {"ready"}, "merge-readiness": {"ready", "not_ready"},
     "merge": {"merged"}, "cleanup": {"cleaned"},
 }
@@ -72,14 +77,16 @@ def validate(payload: object) -> dict:
     if not isinstance(action, str) or action not in ACTIONS:
         failed(action, "invalid_input", "unknown action")
     required = {"contract", "version", "action", "repo", *ACTIONS[action]}
-    allowed = required | ({"approved"} if action in GATED else set())
+    allowed = required | ({"approval"} if action in GATED else set())
     if set(payload) != allowed and not (set(payload) == required and action in GATED):
         failed(action, "invalid_input", {"unexpected": sorted(set(payload) - allowed), "missing": sorted(required - set(payload))})
     repo = payload.get("repo")
     if not isinstance(repo, str) or not Path(repo).is_absolute() or not Path(os.path.realpath(repo)).is_dir():
         failed(action, "invalid_input", "repo must be an existing absolute directory")
-    if "approved" in payload and type(payload["approved"]) is not bool:
-        failed(action, "invalid_input", "approved must be boolean")
+    if "approval" in payload:
+        problem = approval_shape_problem(payload["approval"])
+        if problem:
+            failed(action, "invalid_input", f"approval {problem}")
     for key in ("branch", "message", "title"):
         if key in payload and (not isinstance(payload[key], str) or not payload[key].strip() or "\n" in payload[key]):
             failed(action, "invalid_input", f"{key} must be non-empty single-line text")
@@ -102,6 +109,54 @@ def validate(payload: object) -> dict:
                 "paths must be unique exact repository-relative single-line paths without surrounding whitespace",
             )
     return payload
+
+
+def parse_until(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def approval_shape_problem(approval: object) -> str | None:
+    """承認範囲の形を検査する。列挙できない範囲（「危険でない限り」など）はこの形に入らない。"""
+    if not isinstance(approval, dict) or not set(approval) <= APPROVAL_KEYS:
+        return "must be an object with actions, pull_requests or branches, until, quote"
+    actions = approval.get("actions")
+    if not isinstance(actions, list) or not actions or any(item not in GATED for item in actions) or len(actions) != len(set(actions)):
+        return "actions must be unique gated actions"
+    if "pull_requests" not in approval and "branches" not in approval:
+        return "must enumerate pull_requests or branches"
+    prs = approval.get("pull_requests", [])
+    if not isinstance(prs, list) or any(type(item) is not int or item <= 0 for item in prs):
+        return "pull_requests must be positive integers"
+    branches = approval.get("branches", [])
+    if not isinstance(branches, list) or any(not isinstance(item, str) or not item.strip() for item in branches):
+        return "branches must be non-empty strings"
+    if parse_until(approval.get("until")) is None:
+        return "until must be an ISO 8601 time with a UTC offset"
+    quote = approval.get("quote")
+    if not isinstance(quote, str) or not quote.strip():
+        return "quote must be the user's words"
+    return None
+
+
+def approval_mismatch(approval: dict, action: str, pr: int | None, branch: str | None, now: datetime) -> list[str]:
+    """今回の実行が承認範囲に入らない要素を返す。空なら範囲内。mergeの対象はPR、それ以外は作業branch。"""
+    outside = []
+    if action not in approval["actions"]:
+        outside.append("action")
+    if action == "merge":
+        if pr not in approval.get("pull_requests", []):
+            outside.append("pull_request")
+    elif branch is None or branch not in approval.get("branches", []):
+        outside.append("branch")
+    if not now < parse_until(approval["until"]):
+        outside.append("until")
+    return outside
 
 
 def read_json(command: list[str], **kwargs) -> tuple[int, dict]:
@@ -147,6 +202,8 @@ def map_completed_operation(action: str, operation: dict, cfg: dict) -> dict:
         result = {key: operation.get(key) for key in ("branch", "sha", "paths")}
     elif action == "push":
         result = {key: operation.get(key) for key in ("branch", "sha", "remote")}
+    elif action == "update-branch":
+        result = {"pull_request": operation.get("pr"), "changed": operation.get("changed"), "sha": operation.get("sha")}
     elif action == "pull-request":
         url = operation.get("url")
         match = re.search(r"/pull/(\d+)/?$", url) if isinstance(url, str) else None
@@ -186,6 +243,7 @@ def map_completed_operation(action: str, operation: dict, cfg: dict) -> dict:
         "commit": lambda r: text(r["branch"]) and text(r["sha"]) and isinstance(r["paths"], list)
             and all(text(item) for item in r["paths"]),
         "push": lambda r: all(text(r[key]) for key in ("branch", "sha", "remote")),
+        "update-branch": lambda r: integer(r["pull_request"]) and boolean(r["changed"]) and text(r["sha"]),
         "pull-request": lambda r: integer(r["pull_request"]) and text(r["url"]) and boolean(r["draft"]),
         "ready-for-review": lambda r: integer(r["pull_request"]) and boolean(r["changed"]),
         "merge-readiness": lambda r: integer(r["pull_request"]) and boolean(r["ready"])
@@ -237,10 +295,15 @@ def main() -> None:
             command += ["--paths-file", paths_file, "--message", payload["message"]]
         if action == "pull-request":
             command += ["--title", payload["title"], "--body-file", payload["body_file"]]
-        if action in {"ready-for-review", "merge-readiness", "merge", "cleanup"}:
+        if action in {"update-branch", "ready-for-review", "merge-readiness", "merge", "cleanup"}:
             command += ["--pr", str(payload["pr"])]
-        if payload.get("approved"):
-            command.append("--approved")
+        mismatch = None
+        if "approval" in payload:
+            branch = subprocess.run(["git", "-C", payload["repo"], "branch", "--show-current"], text=True, capture_output=True)
+            current = branch.stdout.strip() if branch.returncode == 0 and branch.stdout.strip() else None
+            mismatch = approval_mismatch(payload["approval"], action, payload.get("pr"), current, datetime.now(timezone.utc))
+            if not mismatch:
+                command.append("--approved")
         code, operation = normalize_internal_operation(*read_json(command))
     finally:
         if paths_file:
@@ -280,10 +343,12 @@ def main() -> None:
         "verification_failed": "verification_failed",
         "merge_partial": "merge_partial",
         "merge_failed": "merge_failed",
+        "conflicts": "conflicts",
         "merged_cleanup_failed": "cleanup_failed",
         "cleanup_failed": "cleanup_failed",
     }
-    public_reason = reason_aliases.get(raw_reason, raw_reason)
+    # 状態名が公開語彙へ写るときは、内部の詳細な理由より状態名を優先する（詳細は detail で返す）。
+    public_reason = reason_aliases.get(status_name) or reason_aliases.get(raw_reason, raw_reason)
     if status == "failed" and public_reason not in PUBLIC_REASONS:
         public_reason = "error"
     result = {
@@ -294,8 +359,12 @@ def main() -> None:
     }
     if waiting:
         result["approval_target"] = operation.get("context", {}) | {"gate": operation.get("gate")}
+        if mismatch:
+            result["approval_target"]["outside_approval"] = mismatch
     if status == "failed" and operation.get("detail") is not None:
         result["detail"] = operation["detail"]
+    elif status == "failed" and raw_reason not in {public_reason, status_name}:
+        result["detail"] = {"reason": raw_reason}
     result_code = 0 if completed else 3
     emit(result, result_code)
 
