@@ -136,4 +136,12 @@ bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/scripts/validate.
 
 ## このpackageが持つ判断
 
-`agent-work-policy` は、Git作業の公開操作（commit、push、baseへの追従、PR作成、レビュー受付、merge、片付け）をいつ実行し、いつ止めるかの判断を持つ。permissionとgateの意味、承認範囲 `approval` の形と組み立ててよい者、mergeしてよい状態（headがbaseの先端を含み、policyの必須checkが成功していること）、baseへの追従の手段（`update-branch`）とmerge方式の関係、並行作業で分ける実行資源の判断がここにある。誰が統合してよいかという役割の判断は持たない。
+`agent-work-policy` は、Git作業の公開操作（commit、push、baseへの追従、PR作成、レビュー受付、merge、片付け）を、いつ実行していつ止めるかを持つ。
+
+permissionとgateの意味、承認範囲 `approval` の形と組み立ててよい者は、公開契約の §2.2 とpolicyの設定が持つ。
+
+mergeしてよい状態（headがbaseの先端を含み、policyの必須checkがそのheadで成功していること）と、baseへの追従の手段（`update-branch`）とmerge方式の関係も、この package が持つ。
+
+並行作業で分ける実行資源の判断は、`references/parallel-work.md` が持つ。
+
+誰が統合してよいかという役割の判断は持たず、`agent-roles` に従う。
