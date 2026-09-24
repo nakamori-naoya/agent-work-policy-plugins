@@ -6,6 +6,7 @@
 # verification: commit前に全て成功させるcommand。
 # merge.readiness: merge gateを提示してよい状態の機械条件。required_checksはmergeに必要なcheckの唯一の定義で、
 #   check名と報告元GitHub Appのslugの組を並べる（同名checkを別のAppやworkflowが成功させても通さないため）。
+#   slugは gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[] | {name, app: .app.slug}' で確かめる。
 version: 1
 workspace:
   use_worktree: false

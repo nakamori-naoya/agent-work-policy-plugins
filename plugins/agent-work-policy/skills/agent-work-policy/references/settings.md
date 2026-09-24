@@ -1,56 +1,35 @@
 # policy設定の意味
 
-このreferenceは、agent-work-policyのpolicy設定の各値を作業判断へ対応させる。設定fileは対象repository rootの `.harness-plugins/agent-work-policy.config.yml` 1つで、`scripts/invoke.py` がrepositoryから解決して読み、`scripts/control.py` がschema（key集合の完全一致と型）を検査する。`false` と空文字は有効な値であり、欠落と `null` は停止する。同梱既定へのfallbackは無く、記入例は `assets/policy.example.yml` にある。
+policy設定は、対象repository rootの `.harness-plugins/agent-work-policy.config.yml` 1つである。`scripts/invoke.py` がrepositoryから解決して読み、`scripts/control.py` がkey集合の完全一致と型を検査する。`false` と空文字は有効な値であり、欠落と `null` は止まる。同梱既定へのfallbackは無い。全keyと書き方は [`assets/policy.example.yml`](../assets/policy.example.yml) のコメントにある。この資料は、keyの一覧ではなく、値が作業のどこでどう効くかを説明する。
 
-## schema
+## permissionとgateは別の問いに答える
 
-- `version`: schema version。`1` 以外は停止する。設定は permission・gate・readiness・workspace の値だけを持ち、agent向けの指示文は持たない。
+`permissions.*` は「その操作をこのrepositoryでagentにさせてよいか」に答える。falseなら、人がどれだけ承認しても実行しない。承認で上書きできると、policyの意味が承認の与え方しだいで変わってしまうからである。`update-branch` は作業branchのremoteを進めるので `permissions.push` に従い、`ready-for-review` は既存PRの状態を変えるだけなので `permissions.pull_request` に従う。
 
-## workspace
+`gates.*` は「その操作の直前に人の確認が要るか」に答える。trueなら、呼び出しの承認範囲 `approval` が今回のaction・対象・時刻を含むときだけ通り、含まなければ承認対象を返して止まる。`update-branch` はgateを持たない。公開済みのbaseを取り込むだけで、新しい内容を公開しないからである。
 
-- `workspace.use_worktree`: `true` なら別worktree、`false` なら現在checkout内の専用branchを使う。
-- `workspace.require_clean_start`: `true` なら開始元に未commit変更があれば `plan` / `start` で停止する。`inspect` は止まらない。
-- `workspace.base_branch`: 作業branchの作成元であり、PRのbase。保護branchへ直接pushしない。
-- `workspace.branch_prefix`: task slugの前へ付ける必須prefix。
-- `workspace.worktree_root`: worktreeの親directory。空文字ならOSの一時directoryを使う。
+## mergeしてよい状態は二つの条件で決まる
 
-## Git操作
+一つ目の条件は、headがbaseの現在の先端を含むことである。readinessはPRが返すbaseではなく、base branchのrefから先端を取り直して比べる。PRが返すbaseは古い値のことがあり、GitHubの `BEHIND` はbranch protectionで最新を必須にしたときしか返らないためである。含まなければ `behind_base` になる。
 
-- `git.remote`: push、remote branch確認、削除に使うremote名。
-- `permissions.commit`: commit操作そのものを許すか。
-- `permissions.push`: push操作そのものを許すか。`update-branch` も作業branchのremoteを進めるので同じpermissionを使う。
-- `permissions.pull_request`: PR作成そのものを許すか。`ready-for-review` も同じpermissionを使う。
-- `permissions.merge`: merge操作そのものを許すか。
+二つ目の条件は、`merge.readiness.required_checks` が並べた必須checkが、そのheadで成功していることである。この配列が必須checkの唯一の定義であり、branch protectionの有無には依存しない。各要素はcheck名と報告元GitHub Appのslugの組である。名前だけで照合しないのは、別のAppやworkflowが同名のcheckを成功させられるからである。GitHub Actionsのslugは `github-actions` で、ほかのAppのslugは次の参照系のAPIで確かめられる。
 
-permissionが `false` なら `permission_denied` で停止し、人間の承認で上書きしない。
+```bash
+gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[] | {name, app: .app.slug}'
+```
 
-## human gate
+必須checkの状態は、完了して失敗したもの（`checks_failed`）、まだ完了していないもの（`checks_pending`）、その名前とAppの組が一度も報告されていないもの（`checks_missing`）に分けて返る。pendingなら待って確かめ直し、failedなら直す作業へ戻り、missingならpolicyの名前かAppが実際の報告と合っているかを確かめる。
 
-- `gates.before_commit`: commit直前に依頼者の明示承認を要求するか。
-- `gates.before_push`: push直前に依頼者の明示承認を要求するか。
-- `gates.before_pull_request`: PR作成直前に依頼者の明示承認を要求するか。
-- `gates.before_merge`: readiness充足後、merge直前に依頼者の明示承認を要求するか。
+このほか、`merge.readiness.min_approvals` は最新reviewのApprove数、`merge.readiness.require_no_unresolved_threads` は未解決review threadが0件であることを求める。承認数が0のpolicyでGitHubが `BLOCKED` を返したときは、実際に当たるRulesetをすべて現在の利用者がPR経由でbypassできる場合に限り、承認不足による `BLOCKED` を許す。必須checkと未解決threadはbypassしない。
 
-gateが `true` なら、呼び出しの `approval` が今回のaction・対象・時刻を含むときだけ通り、含まなければ承認対象を返して `waiting_for_human` で止まる。`update-branch` は公開済みのbaseを取り込むだけで新しい内容を公開しないので、gateを持たない。
+## merge方式はbaseへの追従の仕方も決める
 
-## 検証とPR
+`merge.method` の `squash`、`merge`、`rebase` はGitHubのmerge APIへ渡し、`fast-forward` はbaseのrefを直接headへ進める。`update-branch` はbaseを作業branchへmergeして取り込むので、`squash` と `merge` のときだけ使える。`rebase` と `fast-forward` では、取り込んだmerge commitがそのままbaseの履歴に入り、その方式を選んだ意味が失われるからである。
 
-- `verification.commands`: commit前に作業directoryで記載順に全件成功させるcommand配列。
-- `pull_request.draft`: `true` ならPRをdraftとして作る。
+`fast-forward` はGitHubのmerge判定を経ないので、server側にpolicy以上の保護があることを求める。branch protectionの必須checkが `required_checks` の名前をすべて含み、必要な承認数が `min_approvals` 以上で、未解決threadを求めるならconversation resolutionが必須で、管理者にも保護が当たることである。また `merge.delete_branch: true` が必須である。
 
-## merge
+`merge.delete_branch` はmerge後にremoteの作業branchを消すか、`merge.delete_worktree` はmerge後にcleanな副worktreeを消すかを決める。後者は `workspace.use_worktree: true` のときだけtrueにできる。
 
-- `merge.method`: `squash` / `merge` / `rebase` はGitHub merge APIへ渡す。`update-branch` は `squash` と `merge` のときだけ使える（`rebase` と `fast-forward` では、baseから取り込んだmerge commitがbaseの履歴へ入るため）。`fast-forward` はGraphQL `updateRefs` の `beforeOid` と `force:false` でbase更新とhead no-op CASをatomicに行い、GitHubのmerge反映後にheadを別CASで削除する。`fast-forward` では `delete_branch: true` が必須で、そうでなければschema検査で停止する。
-- `merge.delete_branch`: merge成功後にremote作業branchを削除するか。worktree削除とは別である。
-- `merge.delete_worktree`: merge成功後にcleanな副worktreeを削除するか。`workspace.use_worktree: true` のときだけ `true` にでき、そうでなければschema検査で停止する。
-- `merge.readiness.min_approvals`: readyに必要な最新reviewのApprove数。`0` も有効である。
-- `merge.readiness.required_checks`: mergeに必要なcheckの唯一の定義である。`{name: <check名>, app: <報告元GitHub Appのslug>}` の重複の無い非空配列で、各要素について、head commitでその名前とAppの組の最新のcheck runが完了して成功し、最後に取り直したPRのcheck rollupでも同じ名前が成功していることをready条件にする。名前だけで照合しないのは、別のAppやworkflowが同名のcheckを成功させられるからである。branch protectionの有無には依存しない。check suiteやcheck runを完全に取得できなければ止まる。
-- `merge.readiness.require_no_unresolved_threads`: `true` なら未解決review threadが0件であることをready条件にする。
+## 作業場所の値
 
-`merge.readiness.min_approvals` が `0` で、GitHubが `mergeStateStatus=BLOCKED` を返した場合、実行器は対象branchへ実際に適用されるRulesetを取得する。全ルールがPRルールであり、選択したmerge methodが許可され、review thread必須をpolicyでも検査し、現在利用者が全RulesetをPR経由でbypassできるとGitHubが返した場合だけ、承認不足による `BLOCKED` を許容する。required checkと未解決threadの失敗はbypassしない。
-
-readinessは、PRの `baseRefOid` ではなくbase branchのrefから現在の先端を取り直し、headがそれを含まなければ `behind_base` を未充足に加える。PRが返すbaseは古い値のことがあり、GitHubの `BEHIND` はbranch protectionで最新を必須にしたときしか返らないためである。
-
-`fast-forward` ではbranch protectionのrequired checkが `required_checks` の名前をすべて含み、required approvalsが `merge.readiness.min_approvals` 以上であり、conversation resolutionが要求時にserver側でも必須で、administratorにも保護が適用されることを確認する。policy判定より弱いserver protectionでは更新しない。
-
-設定値を報告用に列挙するだけで終わらせない。各値はworkspace作成、公開操作、停止、PR、mergeの該当箇所へ反映する。
+`workspace.use_worktree` はworktreeで作業するか、現在のcheckoutで専用branchを切るかを決める。`workspace.require_clean_start` がtrueなら、開始元に未commitの変更があるとき `plan` と `start` が止まる（`inspect` は止まらない）。`workspace.base_branch` は作業branchの作成元でありPRのbase、`workspace.branch_prefix` は作業branch名に必須の接頭辞、`workspace.worktree_root` はworktreeの親directory（空文字ならOSの一時directory）、`git.remote` はpushとremote branchの照会に使うremote名である。`verification.commands` はcommitの前に記載順に全件成功させるcommand、`pull_request.draft` はPRを下書きで作るかを決める。
