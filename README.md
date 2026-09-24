@@ -133,3 +133,7 @@ bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/scripts/validate.
 保守用tool（doctor / lint-consumer-contract / evaluate-skills / release / test-hardening / validate-plugin-repository）の実装元は兄弟checkoutの `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools/` の実在を確認してから呼び、無ければ止まる。CIの `validate.yml` も `harness-tools` を兄弟checkoutして `harness-tools/ci/validate.sh` を実行する。呼び方は `../harness-tools/README.md` にある。
 
 [意味評価fixture](evals/scenarios.json)を `harness-tools` の評価runner（`scripts/run-evals.sh`）へ渡した記録は、criterionの真偽を機械の合否にせず、人またはエージェントが根拠付きで評価する。
+
+## このpackageが持つ判断
+
+`agent-work-policy` は、Git作業の公開操作（commit、push、baseへの追従、PR作成、レビュー受付、merge、片付け）をいつ実行し、いつ止めるかの判断を持つ。permissionとgateの意味、承認範囲 `approval` の形と組み立ててよい者、mergeしてよい状態（headがbaseの先端を含み、policyの必須checkが成功していること）、baseへの追従の手段（`update-branch`）とmerge方式の関係、並行作業で分ける実行資源の判断がここにある。誰が統合してよいかという役割の判断は持たない。
