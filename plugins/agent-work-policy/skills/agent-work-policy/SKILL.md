@@ -51,6 +51,10 @@ policy設定fileは `<repository root>/.harness-plugins/agent-work-policy.config
 
 worktreeが分けるのはGitの作業fileだけである。container project名、公開port、named volume、共有DB、固定pathのcacheやsocketは、worktreeをまたいで同じ名前で共有される。複数の作業場所を並行で `start` する前に、[並行作業の実行資源](references/parallel-work.md)に従って、検証commandが起動・再作成する資源とその名前の決め方を読み、作業場所ごとに分けられない資源を使う検証は直列にする。
 
+### 秘密値を巻き込んでいないか
+
+commitとpushの前に、検証commandの中の秘密値の検査が、Gitに入り得るファイルだけを見ているかを確かめる。作業ツリーを退避したり写したりする前と、別の端末や作業者へ秘密値の一式を渡す前には、[秘密値の扱い](references/secret-handling.md)を読む。
+
 ### 結果は実行した操作だけを示しているか
 
 CLIのnonzero、取得不能、scope外path、公開先やSHAの不一致、部分適用を成功として扱わない。`commit` を受けて `push` まで進むような、入力に無い次工程を実行しない。policyの値、worktreeの作り方、branch名の組み立て、readinessの判定手順は公開入力から変えられない。呼び出し元が必要とする値（base branch、remote、draft設定、作業branch、worktree）は出力の `workspace` で毎回返す。

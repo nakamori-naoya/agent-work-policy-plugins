@@ -144,4 +144,6 @@ mergeしてよい状態（headがbaseの先端を含み、policyの必須check�
 
 並行作業で分ける実行資源の判断は、`references/parallel-work.md` が持つ。
 
+秘密値を検査する範囲、受け渡す一式が揃っているかの確かめ方、退避と写しでの扱いは、`references/secret-handling.md` が持つ。
+
 誰が統合してよいかという役割の判断は持たず、`agent-roles` に従う。

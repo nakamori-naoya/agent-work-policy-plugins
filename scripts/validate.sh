@@ -88,7 +88,7 @@ fi
 
 # ── 3. 公開入口: SKILL / playbook.yml / CONTRACT.md / scripts ─────────────
 entry_ok=1
-for required in playbook.yml SKILL.md CONTRACT.md scripts/invoke.py scripts/control.py scripts/config.py references/settings.md references/operation-contract.md references/activation.md references/parallel-work.md assets/policy.example.yml; do
+for required in playbook.yml SKILL.md CONTRACT.md scripts/invoke.py scripts/control.py scripts/config.py references/settings.md references/operation-contract.md references/activation.md references/parallel-work.md references/secret-handling.md assets/policy.example.yml; do
   [ -f "$ENTRY/$required" ] || entry_ok=0
 done
 [ "$(skill_frontmatter_name "$ENTRY/SKILL.md")" = "agent-work-policy" ] || entry_ok=0
