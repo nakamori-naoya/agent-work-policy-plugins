@@ -1,7 +1,7 @@
 {
   "name": "agent-work-policy",
   "version": "5.0.1",
-  "description": "Git作業の1操作を、repositoryのpolicyのpermission・human gate・必須checkに従って実行する公開playbook agent-work-policyを提供する",
+  "description": "gitとghで直接行うGit作業の規律（mergeの条件、承認の受け取り方、並行作業の資源、秘密値の扱い）を提供する",
   "author": {
     "name": "NaoyaNakamori"
   },
@@ -17,31 +17,7 @@
   "metadata": {
     "harness": {
       "marketplace": "agent-work-policy",
-      "contractVersion": 1,
-      "playbooks": {
-        "agent-work-policy": "./skills/agent-work-policy"
-      },
-      "implements": [
-        {
-          "id": "agent-work-policy/agent-work-policy",
-          "version": 1,
-          "kind": "playbook",
-          "playbook": "agent-work-policy",
-          "actions": [
-            "inspect",
-            "plan",
-            "start",
-            "commit",
-            "push",
-            "update-branch",
-            "pull-request",
-            "ready-for-review",
-            "merge-readiness",
-            "merge",
-            "cleanup"
-          ]
-        }
-      ]
+      "contractVersion": 1
     }
   }
 }
