@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "plugin": "agent-work-policy",
+  "version": "5.0.1",
+  "created_at": "2026-09-25T05:47:06.856636+00:00",
+  "notes": "承認範囲 §2.2 に、対象を何で照合するかを操作ごとに明記した（merge は pull_requests、それ以外のすべての操作と他のpackageの確認は branches）。実行agentが呼ばない control.py の保守者向けの説明を reference から invoke.py のコメントへ移した。",
+  "breaking": "なし（照合の規則は 5.0.0 の control.py と同じで、契約の文を明確にしただけ）",
+  "migration": "marketplace を update し plugin を再 install する。",
+  "checks": {
+    "codex": {
+      "status": "manifest-and-contract-tests-passed",
+      "native-client-installation": "not-executed（merge 後に install-plugins.sh で導入）",
+      "evidence": "bash scripts/validate.sh: exit 0 (Validation: passed)"
+    },
+    "claude": {
+      "status": "manifest-and-contract-tests-passed",
+      "native-client-installation": "not-executed（merge 後に install-plugins.sh で導入）",
+      "evidence": "bash scripts/validate.sh: exit 0 (Validation: passed)"
+    },
+    "root-validation": "root scripts/validate.sh agent-work-policy-plugins: Root validation: passed"
+  },
+  "files": [
+    ".agents/plugins/marketplace.json",
+    "plugins/agent-work-policy/.codex-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "plugins/agent-work-policy/.claude-plugin/plugin.json"
+  ]
+}
