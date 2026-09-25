@@ -37,7 +37,7 @@ syntax_failed=0
 while IFS= read -r script; do bash -n "$script" || syntax_failed=1; done < <(find "$ROOT/scripts" "$ROOT/tests" -name '*.sh' -type f | sort)
 [ "$syntax_failed" -eq 0 ] && pass "shell 構文" || fail "shell 構文"
 
-# repositoryの回帰検査（harness-tools）: CI workflowのSHA固定、公開入口の一意性、doctorの読み取り専用性
+# repositoryの回帰検査（harness-tools）: CI workflowのSHA固定
 python3 "$TOOLS/test-hardening.py" --repository "$ROOT" && pass "test-hardening --repository" || fail "test-hardening --repository"
 bash "$ROOT/tests/license-contract.sh" && pass "LICENSE 契約" || fail "LICENSE 契約"
 bash "$ROOT/tests/secret-scanning-contract.sh" && pass "secret scanning 契約" || fail "secret scanning 契約"
