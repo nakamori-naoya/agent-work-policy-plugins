@@ -9,7 +9,7 @@
       "name": "agent-work-policy",
       "source": "./plugins/agent-work-policy",
       "description": "gitとghで直接行うGit作業の規律",
-      "version": "5.0.1"
+      "version": "6.0.0"
     }
   ]
 }
