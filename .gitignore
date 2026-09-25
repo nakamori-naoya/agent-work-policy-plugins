@@ -17,5 +17,4 @@ __pycache__/
 !/AGENTS.md
 !/README.md
 !/.gitignore
-!/evals/
 !/releases/
