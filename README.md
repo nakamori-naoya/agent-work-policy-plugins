@@ -46,7 +46,7 @@ repositoryごとの変更、commit、push、PR、mergeの許可とhuman gateを�
 | 公開entry | `scripts/invoke.py`。契約入力objectを標準入力で受け、契約出力objectを標準出力で返す |
 | 利用者設定 | `<repo>/.harness-plugins/agent-work-policy.config.yml`（1層・必須） |
 
-別pluginからこのpackageを使うときは、`steps[].playbook: agent-work-policy` だけで呼ぶ。内部の script、references、設定 schema、exit code へは依存できない。頼ってよい入力・出力・保証は [CONTRACT.md](plugins/agent-work-policy/skills/agent-work-policy/CONTRACT.md) が正式な定義である。
+別pluginからこのpackageを使うときは、`steps[].playbook: agent-work-policy` だけで呼ぶ。内部の script、references、設定 schema、exit code へは依存できない。頼ってよい入力・出力・保証は、[CONTRACT.md](plugins/agent-work-policy/skills/agent-work-policy/CONTRACT.md) に書かれたものだけである。
 
 ## インストール
 
