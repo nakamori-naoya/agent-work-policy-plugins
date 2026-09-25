@@ -1,6 +1,6 @@
 # 常時適用する
 
-**pluginのインストールだけでは、すべてのGit操作へ自動適用されない。** skillが呼ばれた作業だけがpolicy設定を読む。policy設定はrepository rootの `.harness-plugins/agent-work-policy.config.yml` に置く（記入例は入口の `assets/policy.example.yml`）。hooksや利用者のsettingsを配布して、黙って強制することはしない。
+pluginをインストールしただけでは、すべてのGit操作へ自動では適用されない。policy設定を読むのは、skillが呼ばれた作業だけである。policy設定はrepository rootの `.harness-plugins/agent-work-policy.config.yml` に置く（記入例は入口の `assets/policy.example.yml`）。hooksや利用者のsettingsを配布して、黙って強制することはしない。
 
 repositoryのすべての変更作業で使う場合は、正式な `AGENTS.md` と `CLAUDE.md` に次の趣旨を置く。
 

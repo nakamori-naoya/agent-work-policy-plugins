@@ -531,6 +531,9 @@ assert control.approval_problem(wide, None) is None
 assert control.approval_mismatch(wide, "push", None, "agent/fix-a", at) == []  # 正例: 事前に名前の分からないbranch
 assert control.approval_mismatch(wide, "push", None, "agentx/fix-a", at) == ["branch"]  # 反例: prefixの外
 assert control.approval_mismatch({**wide, "branches": ["agent/fix-a"]}, "push", None, "agent/fix-ab", at) == ["branch"]  # 境界例: 末尾 / の無い要素は完全一致
+# §2.2: merge 以外は、PR番号を入力に取る操作でも作業branchで照合する。branches だけの承認で update-branch が通り、PR番号だけの承認では通らない
+assert control.approval_mismatch({**wide, "actions": ["update-branch"]}, "update-branch", 7, "agent/fix-a", at) == []
+assert control.approval_mismatch({k: v for k, v in {**wide, "actions": ["update-branch"], "pull_requests": [7]}.items() if k != "branches"}, "update-branch", 7, "agent/fix-a", at) == ["branch"]
 policy_cfg = {"workspace": {"branch_prefix": "agent/", "base_branch": "main"}}
 assert control.approval_problem(wide, policy_cfg) is None
 assert control.approval_problem({**wide, "branches": ["main"]}, policy_cfg) is not None  # 反例: base branch
