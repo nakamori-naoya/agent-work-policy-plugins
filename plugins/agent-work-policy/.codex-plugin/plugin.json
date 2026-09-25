@@ -1,6 +1,6 @@
 {
   "name": "agent-work-policy",
-  "version": "5.0.1",
+  "version": "6.0.0",
   "description": "gitとghで直接行うGit作業の規律（mergeの条件、承認の受け取り方、並行作業の資源、秘密値の扱い）を提供する",
   "author": {
     "name": "NaoyaNakamori"
