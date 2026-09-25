@@ -10,6 +10,11 @@ exit: 0 = completed、2 = 入力不備または policy 不備（Git操作前に�
 
 承認は `approval` object（actions・対象・期限・利用者の原文）で受け、形を検査してから control.py へそのまま渡す。
 範囲の照合はgateを持つ control.py が一か所で行い、範囲に入らなければ外れた要素を approval_target に添える。
+
+control.py の呼び方と、内部の結果を公開の語彙へ写す規則（保守者向け。agentはこの script だけを実行する）:
+`invoke.py` は、`--config` に対象repository rootのpolicy設定fileの絶対path、`--repo` に対象repository、actionごとに `--branch`、`--paths-file` と `--message`、`--title` と `--body-file`、`--pr` を渡す。承認範囲は、形を検査したうえで `--approval` にJSONのまま渡す。範囲の照合はgateを持つ `control.py` が一か所で行い、真偽値の承認は運ばない。policy設定fileは `--repo` のrepository rootにあるものでなければならず、別repositoryの設定は拒否される。
+`control.py` は標準出力へJSON objectを1つ返す。成功の `status` は `inspected`、`ready`、`created`、`committed`、`pushed`、`updated`、`merged`、`cleaned` のどれかで、`update-branch` と `ready-for-review` の結果は外部を変えたかを `changed` で示す。終了codeは、0が成功、2が引数・設定・repositoryの不備（操作前に停止）、3がpermission拒否・承認待ち・readiness未充足・検証失敗・競合・操作失敗、4がbase更新後にPR反映を確認できない `merge_partial` である。
+`invoke.py` はこの内部の結果を公開の語彙へ写し、内部の `status` 名と終了codeをそのまま外へ出さない。成功は `completed`、承認待ちは `waiting_for_human`、それ以外は `failed` になる。`forbidden` は `permission_denied`、`not_ready` は `not_ready`（merge-readinessの照会では `completed`）、`verification_failed`、`no_changes`、`conflicts`、`method_incompatible`、`merge_partial`、`merge_failed` はそれぞれ同名、`merged_cleanup_failed` は `cleanup_failed`、それ以外の失敗と操作前の不備は `error` になる。公開の語彙に写らない内部の理由は `detail` に添える。
 """
 
 from __future__ import annotations
