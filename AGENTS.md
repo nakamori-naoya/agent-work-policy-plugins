@@ -1,4 +1,4 @@
-> 作業を始める前に、workspace規約入口 `/Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/AGENTS.md` を読み、そこから指定される共通規約とこのrepository固有の規則を適用する。
+> 共通の規約は /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/AGENTS.md にある。ここには、この repository だけの規則を置く。
 
 # AGENTS.md
 
@@ -32,18 +32,3 @@ policy設定は `<repo>/.harness-plugins/agent-work-policy.config.yml` だけを
 2. `implements[0].actions` と `playbook.yml` の `contract.actions` を同じ集合に保つ。action は kebab-case。
 3. `CONTRACT.md` の入口・入力・出力・保証・利用者設定・非契約を更新する。契約の版は 1 固定である。§5.1 の schema、`assets/policy.example.yml`、`control.py` の `POLICY_SCHEMA` は同じキー集合を持つ。
 4. 1 呼び出し 1 action を崩さない。
-
-## 共通実装
-
-保守tool（root契約の構造検査、回帰検査、消費側lint、release、eval）の基準資料は兄弟checkout `../harness-tools/` であり、このrepositoryは複製を持たない。`scripts/validate.sh` は `../harness-tools/tools` の実在を確認してから呼び、無ければ止まる。
-
-## 変更後
-
-```bash
-bash scripts/validate.sh
-bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/scripts/validate.sh /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/agent-work-policy-plugins
-```
-
-## 検査スクリプトは、意味が一意に決まることだけを判定する
-
-このrepositoryの検査スクリプト（validate、lint、verify、checkなど、名前を問わない）が判定してよいのは、ファイルや見出しの有無、識別子や版の一致、宣言と配置の対応、禁止された書き方の有無のように、入力と基準資料から意味が決定論的に一意に決まることだけである。読んで解釈しないと決まらないことや、件数や語の出現のような品質の代わりの指標は判定せず、エージェントが読んで評価する（意味評価）。判定が一意に決まることを宣言できない検査は作らず、詳しい条件は `/Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/.agents/rules/deterministic-validation.md` に従う。
