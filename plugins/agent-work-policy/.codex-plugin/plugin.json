@@ -16,8 +16,7 @@
   },
   "metadata": {
     "harness": {
-      "marketplace": "agent-work-policy",
-      "contractVersion": 1
+      "marketplace": "agent-work-policy"
     }
   }
 }
