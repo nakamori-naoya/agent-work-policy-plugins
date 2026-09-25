@@ -3,12 +3,12 @@
   "owner": {
     "name": "NaoyaNakamori"
   },
-  "description": "Git作業の権限とhuman gateを一つのPlaybookパッケージとして配布するmarketplace",
+  "description": "gitとghで直接行うGit作業の規律を配布するmarketplace",
   "plugins": [
     {
       "name": "agent-work-policy",
       "source": "./plugins/agent-work-policy",
-      "description": "Git作業の1操作を、repositoryごとのpermissionとhuman gateに従って実行する",
+      "description": "gitとghで直接行うGit作業の規律",
       "version": "5.0.1"
     }
   ]
