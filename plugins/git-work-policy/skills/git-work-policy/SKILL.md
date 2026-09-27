@@ -1,9 +1,9 @@
 ---
-name: agent-work-policy
+name: git-work-policy
 description: AIエージェントがGit repositoryの変更を、gitとghで直接commit、push、PR、baseへの追従、mergeするときの規律。mergeの条件、利用者の承認の受け取り方、並行作業での資源の分け方、秘密値の扱いを定める。「PRまで進めて」「worktreeで並行に作業して」「mergeして」と依頼されたとき、またrepositoryのAGENTS.mdが利用を求めるときに使う。
 ---
 
-# agent-work-policy
+# git-work-policy
 
 Git と GitHub の操作は、`git` と `gh` で直接行う。この skill が持つのは操作の手順ではなく、エージェントが自分では外しやすい五つの判断である。
 

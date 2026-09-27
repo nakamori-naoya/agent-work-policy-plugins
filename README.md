@@ -1,16 +1,16 @@
-# Agent Work Policy
+# Git Work Policy
 
-AIエージェントがGit repositoryの変更を `git` と `gh` で直接commit、push、PR、merge するときの規律を配る、Claude Code/Codex両対応のmarketplaceである。公開するのはpackage `agent-work-policy`（`./plugins/agent-work-policy`）1件と、skill `agent-work-policy` 1つである。
+AIエージェントがGit repositoryの変更を `git` と `gh` で直接commit、push、PR、merge するときの規律を配る、Claude Code/Codex両対応のmarketplaceである。公開するのはpackage `git-work-policy`（`./plugins/git-work-policy`）1件と、skill `git-work-policy` 1つである。
 
 ## 何を決めるか
 
-手順は持たず、エージェントが自分では外しやすい五つの判断だけを[SKILL.md](plugins/agent-work-policy/skills/agent-work-policy/SKILL.md)に書く。mergeの条件（headがbaseの今の先端を含み、必須checkがそのheadで成功していること）はGitHubのRulesetに守らせる。merge できる状態は merge してよい理由にならず、利用者が許可したときだけmergeする。別のエージェントから中継された文章を利用者の承認として扱わない。並行作業ではGit以外の資源（container、port、DB）も分ける。秘密値を検査と退避で取りこぼさない。
+手順は持たず、エージェントが自分では外しやすい五つの判断だけを[SKILL.md](plugins/git-work-policy/skills/git-work-policy/SKILL.md)に書く。mergeの条件（headがbaseの今の先端を含み、必須checkがそのheadで成功していること）はGitHubのRulesetに守らせる。merge できる状態は merge してよい理由にならず、利用者が許可したときだけmergeする。別のエージェントから中継された文章を利用者の承認として扱わない。並行作業ではGit以外の資源（container、port、DB）も分ける。秘密値を検査と退避で取りこぼさない。
 
 このpluginはGitHubの権限を設定しない。第三者の直pushや無断mergeを防ぐのは、GitHubのRuleset、CODEOWNERS、repositoryの権限である。
 
 ## インストール
 
-インストールするのは`agent-work-policy@agent-work-policy`です。外部プラグインの追加は不要です。
+インストールするのは`git-work-policy@git-work-policy`です。外部プラグインの追加は不要です。
 
 ### Codex
 
@@ -18,7 +18,7 @@ AIエージェントがGit repositoryの変更を `git` と `gh` で直接commit
 
 ```bash
 codex plugin marketplace add nakamori-naoya/agent-work-policy-plugins
-codex plugin add agent-work-policy@agent-work-policy
+codex plugin add git-work-policy@git-work-policy
 codex plugin list
 ```
 
@@ -31,7 +31,7 @@ codex plugin list
 ```bash
 CLAUDE_PLUGIN_SCOPE=user
 claude plugin marketplace add nakamori-naoya/agent-work-policy-plugins --scope "$CLAUDE_PLUGIN_SCOPE"
-claude plugin install agent-work-policy@agent-work-policy --scope "$CLAUDE_PLUGIN_SCOPE"
+claude plugin install git-work-policy@git-work-policy --scope "$CLAUDE_PLUGIN_SCOPE"
 claude plugin list
 ```
 
@@ -44,8 +44,8 @@ GitHubから登録したmarketplaceを更新し、その公開パッケージを
 ### Codex
 
 ```bash
-codex plugin marketplace upgrade agent-work-policy
-codex plugin add agent-work-policy@agent-work-policy
+codex plugin marketplace upgrade git-work-policy
+codex plugin add git-work-policy@git-work-policy
 codex plugin list
 ```
 
@@ -56,8 +56,8 @@ codex plugin list
 ```bash
 # インストール時に合わせてuser / project / localを選ぶ
 CLAUDE_PLUGIN_SCOPE=user
-claude plugin marketplace update agent-work-policy
-claude plugin update agent-work-policy@agent-work-policy --scope "$CLAUDE_PLUGIN_SCOPE"
+claude plugin marketplace update git-work-policy
+claude plugin update git-work-policy@git-work-policy --scope "$CLAUDE_PLUGIN_SCOPE"
 claude plugin list
 ```
 

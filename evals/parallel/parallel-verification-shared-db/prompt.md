@@ -1,7 +1,7 @@
 ---
-plugins: ["../../../plugins/agent-work-policy"]
+plugins: ["../../../plugins/git-work-policy"]
 description: 二つの worktree で完了判定の検証を並行に走らせる計画を立てさせ、検証の中の道具が固定名の資源（利用者の開発 DB）に当たることを読み取って、並行にしない判断ができるかを確かめる。Docker は起動しない。
-tags: [agent-work-policy, parallel]
+tags: [git-work-policy, parallel]
 max_turns: 80
 timeout_seconds: 1800
 allowed_tools: [Read, Glob, Grep, Skill, TodoWrite, Write, Edit, Bash]

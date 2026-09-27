@@ -15,7 +15,7 @@ mkdir -p receipt tests
 cat > AGENTS.md <<'MD'
 # receipt
 
-レシートの明細を扱う小さなライブラリである。完了判定は `python3 -m unittest` が通ることとする。Git と GitHub の作業は agent-work-policy に従う。
+レシートの明細を扱う小さなライブラリである。完了判定は `python3 -m unittest` が通ることとする。Git と GitHub の作業は git-work-policy に従う。
 MD
 cat > receipt/__init__.py <<'PY'
 MAX_LINES = 100

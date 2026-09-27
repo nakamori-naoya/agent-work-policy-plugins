@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-work-policy の repository 検査。配置と manifest は harness-tools の validate-plugin-repository.py が判定する。
+# git-work-policy の repository 検査。配置と manifest は harness-tools の validate-plugin-repository.py が判定する。
 # ここで足すのは、LICENSE の写し、secret scanning の設定、shell の構文である。
 # SKILL の規律が十分かは、読んで評価する。
 set -uo pipefail
@@ -11,7 +11,7 @@ passed=0 failed=0
 pass() { printf 'PASS: %s\n' "$1"; passed=$((passed + 1)); }
 fail() { printf 'FAIL: %s\n' "$1"; failed=$((failed + 1)); }
 
-PACKAGE="$ROOT/plugins/agent-work-policy"
+PACKAGE="$ROOT/plugins/git-work-policy"
 
 python3 "$TOOLS/validate-plugin-repository.py" "$ROOT" && pass "package 構造（harness-tools）" || fail "package 構造（harness-tools）"
 
