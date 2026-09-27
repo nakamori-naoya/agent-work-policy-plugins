@@ -1,15 +1,15 @@
 {
-  "name": "agent-work-policy",
+  "name": "git-work-policy",
   "owner": {
     "name": "NaoyaNakamori"
   },
   "description": "gitとghで直接行うGit作業の規律を配布するmarketplace",
   "plugins": [
     {
-      "name": "agent-work-policy",
-      "source": "./plugins/agent-work-policy",
+      "name": "git-work-policy",
+      "source": "./plugins/git-work-policy",
       "description": "gitとghで直接行うGit作業の規律",
-      "version": "6.0.0"
+      "version": "7.0.0"
     }
   ]
 }
