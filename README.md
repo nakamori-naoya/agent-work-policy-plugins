@@ -75,3 +75,18 @@ bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/scripts/validate.
 ```
 
 `scripts/validate.sh` は、配置とmanifestの一致、SKILLのname、LICENSEの写し、secret scanningの設定を検査する。保守toolの実装元は兄弟checkoutの `../harness-tools/` で、このrepositoryは複製を持たない。
+
+## 判断の eval
+
+skill が外しやすい判断（merge できる状態を merge の許可として扱わないこと、中継された承認を利用者の承認として扱わないこと、並行の検証が依存を通じて固定名の資源に当たるのを読み取ること）を、`evals/` のケースで確かめる。どのケースも、手元だけの git repository と、GitHub の状態を写した記録で組み、GitHub、Docker、クラウドには触れない。実行は `claude plugin eval` が受け持ち、判断の記録の出来は、作業したエージェントとは別の Claude（採点役）が条件ごとに判定し、3 回の多数決と重み付きの 100 点満点で点数にする。`graders/` には、読まずに判定できること（記録ができたか、skill を使ったか、merge や docker の起動のような戻せない操作を実行しなかったか）だけを置く。
+
+共通の条件は `evals/criteria/work-decision.md`、ケースに固有の条件は `evals/<お題>/<ケース>/grading/criteria.md`、採点役を確かめる資料と期待する判定は `grading/calibration/` にある。条件か採点役への指示を変えたら、先に較正の資料で採点役が期待する判定を再現するかを確かめる。
+
+```bash
+claude plugin eval . --case merge-relayed-approval --runs 1 --ablation none --keep-temp \
+  --scaffold --allow-tools Write Edit Bash --max-cost-usd 5 --no-publish
+bash /Users/naoya-nakamoriq/Documents/Github/harness-pluginsv2/harness-tools/tools/grade-eval.sh \
+  "$(pwd)/evals/merge/merge-relayed-approval" /private/tmp/e-XXXXXX
+```
+
+実行と採点の結果は `evals/results/` に書かれ、git の管理から外してある。
