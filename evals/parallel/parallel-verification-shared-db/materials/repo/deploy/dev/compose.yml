@@ -1,0 +1,18 @@
+# 手元の開発環境。make dev で起動し、開発中のデータを pgdata に持つ。
+name: shop-dev
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  migrate:
+    image: ghcr.io/example/migrate:1
+    depends_on: [db]
+    command: ["--database", "${DATABASE_URL}"]
+volumes:
+  pgdata:
+    name: shop-dev-pgdata
