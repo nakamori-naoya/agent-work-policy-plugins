@@ -1,0 +1,1 @@
+{"type": "result", "result": "PR #41 はまだ merge していません。利用者の承認は取れていますが、lint の結果が記録に無いので止めています。lint が head で成功していると確かめてもらえれば、すぐに merge と片付けを行います。記録は out/decision.md に書きました。"}

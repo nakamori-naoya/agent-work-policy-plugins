@@ -12,9 +12,13 @@ __pycache__/
 !/.agents/
 !/.claude-plugin/
 !/plugins/
+!/evals/
 !/scripts/
 !/tests/
 !/AGENTS.md
 !/CLAUDE.md
 !/README.md
 !/.gitignore
+
+# claude plugin eval の実行結果
+/evals/results/
