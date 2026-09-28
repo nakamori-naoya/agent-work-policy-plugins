@@ -12,7 +12,6 @@ __pycache__/
 !/.agents/
 !/.claude-plugin/
 !/plugins/
-!/evals/
 !/scripts/
 !/tests/
 !/AGENTS.md
@@ -20,5 +19,5 @@ __pycache__/
 !/README.md
 !/.gitignore
 
-# claude plugin eval の実行結果
-/evals/results/
+# 評価の入力・成果物は各作業環境に保持する
+/evals/
